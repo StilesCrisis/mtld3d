@@ -11,7 +11,9 @@
 //!   [`crate::page_box::PageBox`] makes, since a `Lock` hands out pointers into
 //!   one;
 //! - a notification around every wait the layer makes on the caller's thread;
-//! - the adapter identity, the shader cache directory and the display modes.
+//! - the adapter identity, the shader cache directory and the display modes;
+//! - the application's `QueryPerformanceCounter` at a display time, for the
+//!   present statistics.
 //!
 //! [`NativeHost`] is the C layout of `D3D9MetalHost` in
 //! `native/include/d3d9metal.h`, field for field; the header owns the contract.
@@ -44,6 +46,9 @@ pub type FreeAppFn = unsafe extern "C" fn(user: *mut c_void, ptr: *mut c_void, s
 /// `D3D9MetalHost::blocking_begin` and `blocking_end`.
 pub type BlockingFn = unsafe extern "C" fn(user: *mut c_void);
 
+/// `D3D9MetalHost::performance_counter`: the application's `QueryPerformanceCounter` at a time.
+pub type PerformanceCounterFn = unsafe extern "C" fn(user: *mut c_void, media_time: f64) -> u64;
+
 /// One display mode a native host reports, `D3D9MetalDisplayMode` in the header.
 #[repr(C)]
 pub struct NativeDisplayMode {
@@ -73,6 +78,8 @@ pub struct NativeHost {
     /// Display modes the adapter reports, in the host's order; null for the default list.
     pub modes: *const NativeDisplayMode,
     pub mode_count: u32,
+    /// The application's `QueryPerformanceCounter` at a `CACurrentMediaTime` time; absent for none.
+    pub performance_counter: Option<PerformanceCounterFn>,
 }
 
 // The C layout `d3d9metal.h` declares, on the 64-bit hosts the build serves.
@@ -86,7 +93,8 @@ const _: () = {
     assert!(core::mem::offset_of!(NativeHost, cache_dir) == 64);
     assert!(core::mem::offset_of!(NativeHost, modes) == 72);
     assert!(core::mem::offset_of!(NativeHost, mode_count) == 80);
-    assert!(size_of::<NativeHost>() == 88);
+    assert!(core::mem::offset_of!(NativeHost, performance_counter) == 88);
+    assert!(size_of::<NativeHost>() == 96);
 };
 
 /// The display mode a host that names none reports, in pixels and Hz.
@@ -193,6 +201,18 @@ impl NativeHost {
             })
             .collect()
     }
+
+    /// The application's `QueryPerformanceCounter` at `media_time`; `None` when the host has none.
+    ///
+    /// `media_time` is on `CACurrentMediaTime`'s clock, the one a drawable's
+    /// `presentedTime` reads.
+    #[must_use]
+    pub fn performance_counter(&self, media_time: f64) -> Option<u64> {
+        let call = self.performance_counter?;
+        // SAFETY: `install`'s contract: the callback stays callable from any
+        // thread for the process.
+        Some(unsafe { call(self.user, media_time) })
+    }
 }
 
 /// Install the host's table for the rest of the process.
@@ -227,6 +247,7 @@ pub unsafe fn install(host: *const NativeHost) -> Result<(), InstallError> {
         cache_dir: core::ptr::null(),
         modes: core::ptr::null(),
         mode_count: 0,
+        performance_counter: None,
     };
     // SAFETY: the caller's contract makes `size` readable first.
     let size = unsafe { core::ptr::read_unaligned(host.cast::<u32>()) };

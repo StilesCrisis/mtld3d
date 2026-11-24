@@ -10,6 +10,7 @@
 
 use core::ffi::c_void;
 
+use mtld3d_core::present_stats::PresentStats;
 use mtld3d_shared::{InPtr, OutPtr};
 use mtld3d_types::{
     D3DDISPLAYMODE, D3DERR_DEVICENOTRESET, D3DPRESENT_PARAMETERS, D3DPRESENTSTATS, Guid,
@@ -114,6 +115,19 @@ impl Direct3DSwapChain9 {
         // SAFETY: `device_inner` is the live owning device (see `SwapChainInner`),
         // alive past its child swapchains per D3D9 lifetime rules.
         unsafe { (*device_inner).device_wrapper() }
+    }
+
+    /// The owning device's present count and last shown present; zeros once the device is unset.
+    fn present_stats(&self) -> (u32, PresentStats) {
+        // SAFETY: `device_inner` is null or the live owning device (see
+        // `SwapChainInner`), alive past its child swapchains.
+        unsafe { self.inner().device_inner.as_ref() }.map_or_else(
+            || (0, PresentStats::default()),
+            |device| {
+                let sink = device.cursor().sinks().present_stats();
+                (sink.last_present_count(), sink.read())
+            },
+        )
     }
 
     /// Whether the owning device is extended; `false` once the device pointer is unset.
@@ -527,45 +541,67 @@ extern "system" fn swapchain_get_present_parameters(
     D3D_OK
 }
 
+/// The number of the device's last `Present` into its window (`mtld3d_core::present_stats`).
 extern "system" fn swapchain_get_last_present_count(this: *mut c_void, count: *mut u32) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    mtld3d_shared::log_once_warn!(target: LOG_TARGET,
-        "stub IDirect3DSwapChain9Ex::GetLastPresentCount → 0 (presents are not counted)");
     if count.is_null() {
         return D3DERR_INVALIDCALL;
     }
+    // SAFETY: vtable thunk; `this` is *mut Direct3DSwapChain9 per the ABI.
+    let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let (presents, _) = obj.present_stats();
     // SAFETY: vtable out-param; `count` is non-null (checked) and points to a
     // writable UINT per the IDirect3DSwapChain9Ex ABI.
-    unsafe { OutPtr::write_opt(count, 0) };
+    unsafe { OutPtr::write_opt(count, presents) };
     D3D_OK
 }
 
+/// The last present the display showed: its number, its refresh and that refresh's time.
+///
+/// `PresentRefreshCount` and `SyncRefreshCount` are both the refresh the
+/// present went out on, which `SyncQPCTime` is the time of; all zero until
+/// the display showed one. `SyncGPUTime` stays 0.
 extern "system" fn swapchain_get_present_stats(
     this: *mut c_void,
     stats: *mut D3DPRESENTSTATS,
 ) -> i32 {
     let _api = crate::com_ref::com_api_lock::<Direct3DSwapChain9>(this);
-    mtld3d_shared::log_once_warn!(target: LOG_TARGET,
-        "stub IDirect3DSwapChain9Ex::GetPresentStats → zeroed statistics");
     if stats.is_null() {
         return D3DERR_INVALIDCALL;
     }
+    // SAFETY: vtable thunk; `this` is *mut Direct3DSwapChain9 per the ABI.
+    let Some(obj) = (unsafe { InPtr::<Direct3DSwapChain9>::opt(this) }) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let (_, shown) = obj.present_stats();
+    let [qpc_low, qpc_high] = split_large_integer(shown.sync_qpc);
     // SAFETY: vtable out-param; `stats` is non-null (checked) and points to a
     // writable `D3DPRESENTSTATS` per the IDirect3DSwapChain9Ex ABI.
     unsafe {
         OutPtr::write_opt(
             stats,
             D3DPRESENTSTATS {
-                present_count: 0,
-                present_refresh_count: 0,
-                sync_refresh_count: 0,
+                present_count: shown.present_count,
+                present_refresh_count: shown.refresh_count,
+                sync_refresh_count: shown.refresh_count,
                 pad: [0; mtld3d_types::D3DPRESENTSTATS_PAD_WORDS],
-                sync_qpc_time: [0; 2],
+                sync_qpc_time: [qpc_low, qpc_high],
                 sync_gpu_time: [0; 2],
             },
         );
     };
     D3D_OK
+}
+
+/// A `LARGE_INTEGER` as its `LowPart` and `HighPart` words.
+fn split_large_integer(value: u64) -> [u32; 2] {
+    let [b0, b1, b2, b3, b4, b5, b6, b7] = value.to_le_bytes();
+    [
+        u32::from_le_bytes([b0, b1, b2, b3]),
+        u32::from_le_bytes([b4, b5, b6, b7]),
+    ]
 }
 
 extern "system" fn swapchain_get_display_mode_ex(

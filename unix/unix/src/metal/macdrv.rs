@@ -575,6 +575,18 @@ fn install_occlusion_observer_once() {
 /// is every poll of a session that stays on one display. The comparison is
 /// bit-exact because both sides come out of the same derivation, so equal
 /// inputs give an identical pattern and only a real change moves it.
+/// Seconds between two refreshes of a panel topping out at `panel_max_hz`, `0.0` when unknown.
+///
+/// A `ProMotion` panel varies its rate below that ceiling, so under Wine this
+/// is the shortest period, which the present statistics count refreshes by.
+fn refresh_period(panel_max_hz: f64) -> f64 {
+    if panel_max_hz > 0.0 {
+        1.0 / panel_max_hz
+    } else {
+        0.0
+    }
+}
+
 fn min_present_duration_change(
     applied_seconds: f64,
     panel_max_hz: f64,
@@ -966,6 +978,7 @@ pub fn attach_metal_layer(
         backing_scale_sink_ptr,
         cursor_kick_sink_ptr,
         client_surface_request_sink_ptr,
+        present_stats_sink_ptr,
         software_cursor,
     } = request;
     if hwnd == 0 || device_handle.is_null() {
@@ -1105,6 +1118,8 @@ pub fn attach_metal_layer(
                 .expect("PE wire pointer fits host address space (unix is 64-bit)"),
             client_surface_request_sink: usize::try_from(client_surface_request_sink_ptr)
                 .expect("PE wire pointer fits host address space (unix is 64-bit)"),
+            present_stats_sink: usize::try_from(present_stats_sink_ptr)
+                .expect("PE wire pointer fits host address space (unix is 64-bit)"),
             client_surface: surface,
         },
     );
@@ -1144,6 +1159,7 @@ pub fn attach_metal_layer(
         },
     );
     att.set_min_present_duration(min_present_duration);
+    att.set_refresh_period(refresh_period(hint.panel_max_hz));
     // One line per attach: the pace a present into this window is held to,
     // by the display when the window is shown and by the presenter when not.
     info!(
@@ -2803,6 +2819,7 @@ fn follow_screen_layer_mode(
 fn follow_screen_present_throttle(att: &Arc<Attachment>, screen: &objc2_app_kit::NSScreen) {
     let pacing = unpack_pacing(att.pacing_bits());
     let panel_max_hz = screen_max_hz(screen);
+    att.set_refresh_period(refresh_period(panel_max_hz));
     let applied = att.min_present_duration_sec();
     let Some(seconds) = min_present_duration_change(applied, panel_max_hz, &pacing) else {
         return;

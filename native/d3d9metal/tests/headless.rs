@@ -236,6 +236,7 @@ fn init_host() {
             cache_dir: core::ptr::null(),
             modes: core::ptr::null(),
             mode_count: 0,
+            performance_counter: None,
         };
         // SAFETY: a complete table whose callbacks live for the process.
         let first = unsafe { d3d9metal::d3d9metal_init(&raw const host) };

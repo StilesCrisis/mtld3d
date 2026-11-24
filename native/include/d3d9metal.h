@@ -36,6 +36,14 @@
  * results), so that memory stays mapped, at the same address, until free_app.
  * The CAMetalLayer's drawableSize is set by the layer, to the layer's bounds
  * times its contentsScale; a back buffer of another size is resampled into it.
+ *
+ * Pacing. A present with any interval but D3DPRESENT_INTERVAL_IMMEDIATE turns
+ * the layer's displaySyncEnabled on, so each frame goes out on a display
+ * refresh and Present waits on the display's cadence (the frame-latency
+ * bound); IMMEDIATE turns it off. The display's refresh rate is the host's to
+ * choose (a ProMotion panel varies it unless something holds it).
+ * IDirect3DSwapChain9Ex::GetPresentStats reports the last present the
+ * display showed, timed by performance_counter.
  */
 #ifndef D3D9METAL_H
 #define D3D9METAL_H
@@ -89,6 +97,13 @@ typedef struct D3D9MetalHost {
      */
     const D3D9MetalDisplayMode *modes;
     uint32_t mode_count;
+    /*
+     * Optional: the application's QueryPerformanceCounter reading at
+     * media_time, a time on CACurrentMediaTime's clock (the presentedTime of
+     * a drawable), for D3DPRESENTSTATS::SyncQPCTime. NULL leaves that time 0.
+     * Called from a thread Metal runs presented handlers on.
+     */
+    uint64_t (*performance_counter)(void *user, double media_time);
 } D3D9MetalHost;
 
 /* d3d9metal_init results. */

@@ -23,7 +23,10 @@
 //! only the newest one is asked to show its surface again when Wine hides its
 //! client view. They pin, too, when a window that reads visible counts as
 //! displaying nothing: after a run of undisplayed paced presents, until the
-//! next displayed one.
+//! next displayed one. And they pin the present statistics a shown present
+//! publishes: the refresh count advances by the refreshes that passed, a
+//! late or stale handler is ignored, and nothing is published once the
+//! record is gone.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::{
@@ -31,14 +34,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use mtld3d_core::present_stats::{PresentStats, PresentStatsSink};
 use mtld3d_shared::mtl::{ClientSurfaceRequest, ColorSpacePolicy};
 
 use super::{
     AttachFlags, AttachLatches, Attachment, HEADROOM_REFRESH_PRESENTS, NewestSurface,
     UNDISPLAYED_PACED_LIMIT, all_on_layer, find, find_by_layer, live, next_unshown_release,
-    publish_backing_scale, register, request_client_surface, request_cursor_kick_all,
-    request_first_frame_present, retain_newest_surface_on, test_address_block,
-    undisplayed_run_edge, unregister,
+    publish_backing_scale, publish_shown_present, refreshes_between, register,
+    request_client_surface, request_cursor_kick_all, request_first_frame_present,
+    retain_newest_surface_on, test_address_block, undisplayed_run_edge, unregister,
 };
 use crate::metal::{
     command::PresentGeometry,
@@ -68,6 +72,7 @@ fn latches(
         backing_scale_sink,
         cursor_kick_sink,
         client_surface_request_sink: 0,
+        present_stats_sink: 0,
         client_surface: 0,
     }
 }
@@ -241,6 +246,7 @@ fn each_record_seeds_its_own_defaults() {
             backing_scale_sink: 0,
             cursor_kick_sink: 0,
             client_surface_request_sink: 0,
+            present_stats_sink: 0,
             client_surface: 0,
         },
     );
@@ -919,4 +925,76 @@ fn a_record_without_a_request_word_asks_nothing() {
         ClientSurfaceRequest::VIEW_HIDDEN
     ));
     unregister(view);
+}
+
+/// The refreshes between two shown presents: the gap over the period, rounded, never under one.
+#[test]
+fn refreshes_between_rounds_the_gap_to_whole_refreshes() {
+    let period = 1.0 / 120.0;
+    assert_eq!(refreshes_between(10.0, 10.0 + period, period), 1, "the next refresh");
+    assert_eq!(
+        refreshes_between(10.0, 2.0_f64.mul_add(period, 10.0), period),
+        2,
+        "one refresh missed"
+    );
+    assert_eq!(
+        refreshes_between(10.0, 1.4_f64.mul_add(period, 10.0), period),
+        1,
+        "jitter rounds to the nearest refresh"
+    );
+    assert_eq!(
+        refreshes_between(10.0, 0.2_f64.mul_add(period, 10.0), period),
+        1,
+        "never two shown presents on one refresh"
+    );
+    assert_eq!(refreshes_between(10.0, 99.0, 0.0), 1, "an unknown period counts one");
+}
+
+/// A shown present publishes its number and the refresh count; the count follows the display.
+#[test]
+fn a_shown_present_publishes_the_refresh_it_went_out_on() {
+    let view = test_address_block();
+    let sink = PresentStatsSink::new();
+    let att = register(
+        view,
+        view + 8,
+        &AttachLatches {
+            present_stats_sink: core::ptr::from_ref(&sink) as usize,
+            ..latches(AttachFlags::empty(), 1, None)
+        },
+    );
+    let period = 1.0 / 120.0;
+    att.set_refresh_period(period);
+    assert_eq!((att.take_present(), att.take_present()), (1, 2), "presents number from 1");
+
+    publish_shown_present(&att, 1, 100.0);
+    assert_eq!(
+        sink.read(),
+        PresentStats {
+            present_count: 1,
+            refresh_count: 1,
+            sync_qpc: 0,
+        },
+        "the first shown present starts the count; Wine has no clock to give"
+    );
+    publish_shown_present(&att, 2, 2.0_f64.mul_add(period, 100.0));
+    assert_eq!(
+        (sink.read().present_count, sink.read().refresh_count),
+        (2, 3),
+        "shown one refresh late: the refresh count moves one further"
+    );
+    publish_shown_present(&att, 1, 100.0 + period);
+    assert_eq!(
+        sink.read().present_count,
+        2,
+        "a handler older than the last publication is ignored"
+    );
+
+    unregister(view);
+    publish_shown_present(&att, 3, 3.0_f64.mul_add(period, 100.0));
+    assert_eq!(
+        sink.read().present_count,
+        2,
+        "nothing is published once the record is gone"
+    );
 }

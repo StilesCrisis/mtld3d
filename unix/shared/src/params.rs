@@ -37,8 +37,9 @@ const _: () = {
     assert!(core::mem::align_of::<CreateCommandQueueParams>() == 8);
     assert!(core::mem::size_of::<CreateCommandQueueParams>() == 40);
     assert!(core::mem::offset_of!(CreateCommandQueueParams, present_debug) == 36);
-    assert!(core::mem::size_of::<AttachMetalLayerParams>() == 96);
+    assert!(core::mem::size_of::<AttachMetalLayerParams>() == 104);
     assert!(core::mem::offset_of!(AttachMetalLayerParams, client_surface_request_ptr) == 88);
+    assert!(core::mem::offset_of!(AttachMetalLayerParams, present_stats_ptr) == 96);
     assert!(core::mem::size_of::<DetachMetalLayerParams>() == 8);
     assert!(core::mem::size_of::<PresentClientSurfaceParams>() == 16);
     assert!(core::mem::offset_of!(PresentClientSurfaceParams, reasons) == 8);
@@ -307,6 +308,12 @@ pub struct AttachMetalLayerParams {
     /// Wine thread. Same backing contract as `backing_scale_ptr`. `0` disables
     /// it.
     pub client_surface_request_ptr: u64, // in: *const AtomicU32 (device-owned box, stable address)
+    /// Address of the device's `mtld3d_core::present_stats::PresentStatsSink`.
+    ///
+    /// The unix side publishes into it from the presented handler of every
+    /// drawable the display shows, which is what `GetPresentStats` reads.
+    /// Same backing contract as `backing_scale_ptr`. `0` disables it.
+    pub present_stats_ptr: u64, // in: *const PresentStatsSink (device-owned box, stable address)
 }
 
 impl Thunk for AttachMetalLayerParams {

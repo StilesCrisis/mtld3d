@@ -128,7 +128,13 @@ static: one process has one host application):
   on one window share its layer and either can go first, and leaves the
   window, its screen and the cursor to the host. No `AppKit` object is touched, nothing hops to
   the main thread, and the presenter resizes the drawable to the layer's
-  bounds as in the Wine build.
+  bounds as in the Wine build. Unlike the Wine build, the layer's
+  `displaySyncEnabled` follows the guest's vsync request (attach, and the
+  `SetDisplaySyncEnabled` of a Reset): the host owns its window, so a vsync'd
+  present goes out on a display refresh as on Windows, the minimum duration
+  only keeps two frames off one refresh, and the frame-latency bound waits on
+  the display's own cadence. A game that times itself by its presents (a
+  rhythm game measuring the refresh rate) needs that cadence exact.
 - `alloc_app` and `free_app` back every `PageBox` a `Lock` can hand out, since
   a host that runs the application in an address window of its own can reach
   nothing else. The runtime's own pages, and the upload snapshots, take the
@@ -140,6 +146,9 @@ static: one process has one host application):
   and writing application memory meanwhile (uploads, query results), so the
   host's application memory has to stay mapped across the bracket.
 - The PCI ids, the shader cache directory and the display modes.
+- `performance_counter`, optional, answers the application's
+  `QueryPerformanceCounter` at a `CACurrentMediaTime` time, which is what
+  `D3DPRESENTSTATS::SyncQPCTime` reports (see "Present statistics" below).
 
 On the API side, `windows/d3d9/src/host.rs` stands in for `dll.rs` (no
 `DllMain`, no loader pin, one logger shared with the runtime) and for the
@@ -153,6 +162,23 @@ without effect and the modes are the host's list. A host resizes by calling
 `Reset`. `mtld3d-core` is one copy for both runtimes there, so its frame
 recorder keys on the `pe_recording` cfg (every PE target, and the
 `native-host` feature) rather than on `cfg(windows)`.
+
+**Present statistics.** `IDirect3DSwapChain9Ex::GetLastPresentCount` and
+`GetPresentStats` read the device's `PresentStatsSink`
+(`mtld3d_core::present_stats`), a box in the device's `DisplaySinks` whose
+address attach hands the unix side like the other sinks. `Present` counts
+every frame it submits into an attached window; the presenter numbers the
+packets of that window in the same order (`Attachment::take_present`, which a
+re-attach carries on from the sink), and every drawable's presented handler,
+paced or not, publishes for a shown one its number, the refresh it went out
+on and that refresh's time (`attachment::publish_shown_present`, under the
+registry lock that makes it the sink's one writer; a sequence word keeps a
+reader from seeing half a publication). The refresh count advances by the
+refreshes between two shown presents at the panel's period, so a present
+shown a refresh late moves it one further than the present count, which is
+how a game counts missed refreshes. The time comes from the host's
+`performance_counter`; the Wine build has no such clock and reports 0 there,
+and counts refreshes at the shortest period of the panel under the window.
 
 Not in the native build: the signal handler (a host's signals are its own),
 the software cursor overlay, the Wine client surfaces, HDR output and the
@@ -599,7 +625,7 @@ The record's `Arc` is what orders its teardown: the presenter thread holds one w
 
 D3D9 allows several devices per process, and the e2e suite creates two live ones. Everything the display decides for one device's window therefore lives on a per-device record on the unix side (`metal/macdrv/attachment.rs`), not in process statics: whether the layer carries the HDR configuration, the live EDR headroom, the present throttle, the window's occlusion, the backing scale published to the PE side, and the present-geometry streak that gates the MetalFX route. `AttachMetalLayer` registers the record, keyed by the raw address of the metal view it created, which is the handle the device's later thunks already carry: the presenter looks its record up by the `present_view` each packet carries, once per present, `DestroyCommandQueue` retires it by `view_handle`, `SetDisplaySyncEnabled` finds it by `layer_handle`, and `SetCursorOverlay` names it by the `view_handle` it carries. A thunk whose view has no record warns once and, for a present, uses the defaults a session on no display would (not occluded, headroom 1.0, no throttle, the shader route).
 
-The record is live exactly while it is in the registry map. The view and layer addresses and the three PE-side sink addresses it holds are valid only then: `DestroyCommandQueue` unregisters the record before it retires the view, and the PE side drops the box behind the sinks (`DisplaySinks`, owned by the device's `CursorState`) after that thunk returns. So every dereference of one of those addresses happens inside a registry helper that holds the map's lock and checks the record is still the one the map holds for its view, by `Arc` identity rather than by key, so a view address the allocator hands out again names a new record. The lock is held for a lookup plus one retain or one atomic store, never across `AppKit` work, and is taken nowhere else. Outside those helpers a record is plain data (atomics and immutable words) that the main-thread observers, the presenter thread and the API thread read freely.
+The record is live exactly while it is in the registry map. The view and layer addresses and the PE-side sink addresses it holds are valid only then: `DestroyCommandQueue` unregisters the record before it retires the view, and the PE side drops the box behind the sinks (`DisplaySinks`, owned by the device's `CursorState`) after that thunk returns. So every dereference of one of those addresses happens inside a registry helper that holds the map's lock and checks the record is still the one the map holds for its view, by `Arc` identity rather than by key, so a view address the allocator hands out again names a new record. The lock is held for a lookup plus one retain or one atomic store, never across `AppKit` work, and is taken nowhere else. Outside those helpers a record is plain data (atomics and immutable words) that the main-thread observers, the presenter thread and the API thread read freely.
 
 The layer Wine creates for a metal view is winemac's `WineMetalLayer`, a `CAMetalLayer` whose `nextDrawable` reads the view's `superview` and `window` and posts the present of the client surface the view sits in, which has Wine show that surface's cocoa view and hide the window's other one. The presenter calls `nextDrawable` on its own thread, so that override walked `AppKit` off the main thread on every present into a visible window. Attach therefore turns the layer into the plain `CAMetalLayer` it extends, on the main thread (`metal/macdrv/client_surface.rs`): the subclass adds no instance variables and overrides nothing else, and a layer of any other class keeps it, warned once. What the override did is done by attach and teardown instead, on the API thread, a Wine thread: attach reads the client surface the view sits in on the main thread and the record holds a reference on it, taken while Wine's window data lock keeps the surface alive whenever the view came through `get_win_data` (a kept view reused in place relies on the device window staying valid for the attach), and win32u's `client_surface_present` shows it once when the device attaches, a present that also has win32u set the surface's frame and superview, and after that only once that surface's own device has submitted a frame. Wine showed the surface of whichever device presented last; the window now shows the surface of the newest device attached to it, and a window a device leaves goes back to the device still on it rather than keeping the departed device's last frame, provided that device has drawn. The override also put the surface right after Wine changed it, on every present: some Wines hide the client view whenever they flush the window surface, and leave the surface out of the updates a window resize makes (win32u sizes it to the client rect only when it is presented). So the device asks for `client_surface_present` again at its next `Present` whenever either happens. On the main thread, a key-value observer on the client view's `hidden` (`metal/macdrv/client_view_watch.rs`, installed by attach, removed by teardown) sets a request bit in a PE-side word of the device's `DisplaySinks` when Wine hides the view of the newest device on its window; the device window's procedure sets another bit, for every device on the window, on a `WM_WINDOWPOSCHANGED` that can move the client area, which arrives once Win32's rects are final, unlike a notification Cocoa posts for its own resize. A third bit, `ATTACHED`, is set by every attach, so the device's first submitted frame asks too. A winemac that keeps a client view shown across window surface flushes does so once the surface was presented while its view was hidden, or presented again after the present that attached it. So the present after a device's first submitted frame is what keeps the flushes after it from hiding the view; a flush before that frame still hides it, on purpose, and the window shows its window surface until the device has drawn. The same rule is why nothing presents a surface early: a present before its device has drawn would keep a view shown whose layer holds nothing. A kept view reused in place is the one exception: its surface is the previous device's, which Wine already counts as presented, so from the attach on a flush keeps the view shown over the parked layer's last frame until the new device's first frame replaces it. `Present` takes the word only after the frame was handed to the encoder, so a `Present` that submits nothing (a device that needs a `Reset`, a failed submission) leaves the request for the next one, and only a set word costs anything: one `PresentClientSurface` thunk on the API thread. The unix side reads that thunk as the device having drawn (`Attachment::note_frame_submitted`), and presents the surface of the newest device on the window only once that device has: a teardown, or another device's request on the same window, that finds the newest device not yet drawn presents nothing and leaves the surface to that device's first frame. The cocoa view's field is read under either name a Wine gives it (`d3dmetal_client_surface` in CrossOver, `dxmt_client_surface` in the WineAndAqua fork); on a Wine where neither exists, or win32u lacks the surface exports, attach leaves the layer its override rather than present without anything that shows the surface.
 

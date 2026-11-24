@@ -2173,6 +2173,11 @@ impl DeviceInner {
         if let Err(hr) = self.encoder.send_frame(frame) {
             return hr;
         }
+        // A frame submitted into an attached window is one present packet on
+        // the unix side, which numbers its packets in this same order.
+        if !self.view_handle.is_null() {
+            self.cursor().sinks().present_stats().note_present();
+        }
         self.frame_dump_present(crate::capture::take_request(), seq);
         drop(stall);
         // What winemac's `nextDrawable` override did on every present, done

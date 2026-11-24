@@ -143,11 +143,16 @@ divergences from D3D9 it keeps on purpose. The tested games are in
   when they refuse a request. `StretchRect` copies between two whole
   default-pool surfaces of one format and size, and `SetPriority` takes the
   default pool. The adapter reports its modes, its display mode and its LUID
-  through the extended calls. `ComposeRects`, `WaitForVBlank`,
-  `CheckResourceResidency`, the GPU thread priority pair,
-  `GetLastPresentCount` and `GetPresentStats` succeed without doing
-  anything, each logged once, `GetPresentStats` filling the 28 bytes the
-  structure has in a 32-bit process and the 32 it has in a 64-bit one, and
+  through the extended calls. `GetLastPresentCount` counts the device's
+  presents into its window, and `GetPresentStats` reports the last one the
+  display showed: its number, the refresh it went out on (as both refresh
+  counts) and, on a native host that gives a clock, that refresh's
+  `QueryPerformanceCounter` time; `SyncGPUTime` is 0, and so is everything
+  until the display shows a present (ARCHITECTURE.md, "Present
+  statistics"). `GetPresentStats` fills the 28 bytes the structure has in a
+  32-bit process and the 32 it has in a 64-bit one. `ComposeRects`,
+  `WaitForVBlank`, `CheckResourceResidency` and the GPU thread priority pair
+  succeed without doing anything, each logged once, and
   `SetConvolutionMonoKernel` answers `D3DERR_INVALIDCALL`. Both kinds of
   device take `D3DPOOL_MANAGED_EX` (pool 6) as `D3DPOOL_MANAGED`, and an
   extended device, which refuses `D3DPOOL_MANAGED`, accepts it; such a

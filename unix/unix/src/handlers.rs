@@ -320,6 +320,7 @@ pub extern "C" fn attach_metal_layer_handler(args: *mut c_void) -> i32 {
         cursor_kick_sink_ptr: params.cursor_kick_ptr,
         #[cfg(not(feature = "native-host"))]
         client_surface_request_sink_ptr: params.client_surface_request_ptr,
+        present_stats_sink_ptr: params.present_stats_ptr,
         software_cursor: params.software_cursor,
     };
     if let Some((view, layer, caps)) = metal::attach_metal_layer(params.device_handle, request) {

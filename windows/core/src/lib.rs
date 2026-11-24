@@ -74,6 +74,7 @@ pub mod pixel_convert;
 pub mod planar_yuv;
 pub mod pool;
 pub mod present;
+pub mod present_stats;
 pub mod process_vertices;
 pub mod ps_draw;
 pub mod query_fence;

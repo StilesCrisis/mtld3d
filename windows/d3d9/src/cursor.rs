@@ -31,6 +31,7 @@ use log::{Level, debug, error, info, log_enabled, trace, warn};
 use mtld3d_core::{
     cursor::{BitmapLayout, reconcile_upload},
     perf::DeviceSubCategory,
+    present_stats::PresentStatsSink,
     window_subclass::WindowSubclasses,
 };
 use mtld3d_shared::{
@@ -393,6 +394,12 @@ pub struct DisplaySinks {
     /// and sends `PresentClientSurface`, which has Wine show the surface
     /// again, sized to the client area.
     client_surface_request: AtomicU32,
+    /// The presents the device made into its window and the last one the display showed.
+    ///
+    /// `Present` counts here, the unix side publishes each shown present
+    /// here, and the swap chain's `GetLastPresentCount` and
+    /// `GetPresentStats` read it.
+    present_stats: PresentStatsSink,
 }
 
 impl DisplaySinks {
@@ -401,7 +408,18 @@ impl DisplaySinks {
             backing_scale: AtomicU32::new(0),
             cursor_kick: AtomicU32::new(0),
             client_surface_request: AtomicU32::new(0),
+            present_stats: PresentStatsSink::new(),
         }
+    }
+
+    /// The address `AttachMetalLayerParams::present_stats_ptr` carries.
+    pub fn present_stats_ptr(&self) -> u64 {
+        (&raw const self.present_stats) as u64
+    }
+
+    /// The device's present statistics.
+    pub const fn present_stats(&self) -> &PresentStatsSink {
+        &self.present_stats
     }
 
     /// The address `AttachMetalLayerParams::client_surface_request_ptr` carries.

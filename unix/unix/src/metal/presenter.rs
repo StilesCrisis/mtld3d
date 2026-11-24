@@ -908,6 +908,12 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
         }
     }
     let attachment = attachment::find(view);
+    // Every packet is one `Present` the device made into the window, taken in
+    // the order it made them, so this is the number `GetLastPresentCount`
+    // gave that call, whether the display shows the frame or not.
+    let number = attachment
+        .as_deref()
+        .map(attachment::Attachment::take_present);
     if attachment.is_none() {
         mtld3d_shared::log_once_warn!(
             target: LOG_TARGET,
@@ -1007,13 +1013,17 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
     // screen: its mark moves into the drawable's presented handler, which
     // also tells the window's record whether the display showed it. Any
     // other mark stays on the packet and resolves when the packet drops below.
-    if paced {
-        let mark = inner
+    // Every present's handler publishes the present statistics when the
+    // display shows it.
+    let mark = if paced {
+        inner
             .pending
             .front_mut()
-            .and_then(|packet| packet.mark.take());
-        resolve_when_presented(&drawable, mark, attachment);
-    }
+            .and_then(|packet| packet.mark.take())
+    } else {
+        None
+    };
+    resolve_when_presented(&drawable, mark, attachment, paced, number);
     super::upscale::retire_evicted(&cb, record.upscale());
     let present_ptr = state.present_retired_ptr();
     let owner = Arc::clone(record);
@@ -1061,25 +1071,35 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
 ///
 /// The handler runs once Metal has shown or skipped the drawable. A handler
 /// Metal releases without calling it drops the mark, which resolves it too,
-/// so the frame stays unfinished no longer than the drawable lives. It also
-/// counts the present on `attachment` while the window reads visible,
-/// displayed when its `presentedTime` is not 0, which is how a visible window
+/// so the frame stays unfinished no longer than the drawable lives. A `paced`
+/// present (one that waits for the display) is also counted on `attachment`
+/// while the window reads visible, displayed when its `presentedTime` is not
+/// 0, which is how a visible window
 /// that shows nothing comes to be paced like an occluded one
-/// ([`attachment::Attachment::displays_nothing`]).
+/// ([`attachment::Attachment::displays_nothing`]). Any present the display
+/// showed publishes the window's present statistics as present `number` on
+/// its window ([`attachment::publish_shown_present`]); `None` when the window
+/// has no record.
 fn resolve_when_presented(
     drawable: &ProtocolObject<dyn CAMetalDrawable>,
     mark: Option<PacedMark>,
     attachment: Option<Arc<attachment::Attachment>>,
+    paced: bool,
+    number: Option<u32>,
 ) {
     let handler = RcBlock::new(
         move |drawable: core::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
+            // SAFETY: Metal invokes the block with the presented drawable;
+            // the pointer is valid for the handler's duration.
+            let presented_time = unsafe { drawable.as_ref() }.presentedTime();
+            let displayed = presented_time > 0.0;
             // A window that reads occluded displays nothing by design and is
             // held for that already; only a visible one's presents count.
-            if let Some(att) = attachment.as_deref().filter(|att| !att.window_occluded()) {
-                // SAFETY: Metal invokes the block with the presented
-                // drawable; the pointer is valid for the handler's duration.
-                let displayed = unsafe { drawable.as_ref() }.presentedTime() > 0.0;
+            if paced && let Some(att) = attachment.as_deref().filter(|att| !att.window_occluded()) {
                 count_paced_present(att, displayed);
+            }
+            if displayed && let (Some(att), Some(number)) = (attachment.as_ref(), number) {
+                attachment::publish_shown_present(att, number, presented_time);
             }
             if let Some(mark) = &mark {
                 mark.resolve();

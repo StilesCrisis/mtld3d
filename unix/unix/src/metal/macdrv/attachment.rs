@@ -12,7 +12,7 @@
 //! own.
 //!
 //! Liveness. A record is live exactly while it is in [`ATTACHMENTS`]. The
-//! `view` and `layer` addresses and the three PE-side sink addresses a record
+//! `view` and `layer` addresses and the PE-side sink addresses a record
 //! holds are valid only while it is live: `DestroyCommandQueue` unregisters
 //! the record before it releases the view, and the PE side drops the box
 //! behind the sinks after that thunk returns. So every dereference of one of
@@ -27,7 +27,8 @@
 //! owns, which its teardown gives back after unregistering it, so another
 //! device's teardown takes its own reference on it under the registry lock.
 //!
-//! The lock is held for a lookup plus one retain or one atomic store, never
+//! The lock is held for a lookup plus one retain, one atomic store or the
+//! few a present statistics publication makes, never
 //! across `AppKit` work, and nothing in this file takes any other lock, so
 //! the registry lock sits at the bottom of every order. It is not taken
 //! anywhere else.
@@ -40,13 +41,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use mtld3d_core::present_stats::{PresentStats, PresentStatsSink};
 #[cfg(not(feature = "native-host"))]
 use mtld3d_shared::mtl::{ClientSurfaceRequest, ColorSpacePolicy};
 #[cfg(not(feature = "native-host"))]
 use objc2::{MainThreadMarker, rc::Retained};
 use rustc_hash::FxHashMap;
 
-use crate::metal::command::{GeometryStreak, PresentGeometry};
+use crate::metal::{
+    command::{GeometryStreak, PresentGeometry},
+    layer::bounded_cast,
+};
 
 /// How many presents may pass between headroom refreshes.
 ///
@@ -116,6 +121,8 @@ pub struct AttachLatches {
     /// Address of the PE-side `AtomicU32` a client surface present is asked through, `0` = none.
     #[cfg(not(feature = "native-host"))]
     pub client_surface_request_sink: usize,
+    /// Address of the PE-side `PresentStatsSink` the shown presents are published into, `0` = none.
+    pub present_stats_sink: usize,
     /// Wine's client surface the view sits in, `0` = none.
     ///
     /// The record owns one reference on it, taken at attach and given back
@@ -148,6 +155,30 @@ pub struct Attachment {
     /// See [`AttachLatches::client_surface`].
     #[cfg(not(feature = "native-host"))]
     client_surface: usize,
+    /// See [`AttachLatches::present_stats_sink`].
+    present_stats_sink: usize,
+    /// The presents the presenter took for this view, the number of the newest.
+    ///
+    /// Counted in the order the device made them, one per present packet,
+    /// which is the order the API side counts its `Present` calls in, so the
+    /// numbers agree with `GetLastPresentCount`. Written only by the
+    /// presenter of the device that owns the view.
+    presents_taken: AtomicU32,
+    /// Seconds between two refreshes of the window's display, as `f64::to_bits`; `0.0` = unknown.
+    ///
+    /// Set where the present throttle is derived from the panel; what the
+    /// refresh count of the present statistics advances by.
+    refresh_period_bits: AtomicU64,
+    /// When the display last showed a present of this view, `presentedTime` as `f64::to_bits`.
+    ///
+    /// `0` until the first one. Read and written only under the registry
+    /// lock, by [`publish_shown_present`].
+    last_shown_bits: AtomicU64,
+    /// The display refreshes counted up to the one the last shown present went out on.
+    ///
+    /// Read and written only under the registry lock, by
+    /// [`publish_shown_present`].
+    shown_refresh_count: AtomicU32,
     /// The main-thread watch on the hidden state of the view's client view, `0` = none.
     ///
     /// An address `client_view_watch` hands out and takes back, dereferenced
@@ -274,6 +305,7 @@ pub struct Attachment {
 
 impl Attachment {
     fn new(view: usize, layer: usize, latches: &AttachLatches) -> Self {
+        let carried = carried_present_stats(latches.present_stats_sink);
         Self {
             view,
             layer,
@@ -285,6 +317,11 @@ impl Attachment {
             client_surface_request_sink: latches.client_surface_request_sink,
             #[cfg(not(feature = "native-host"))]
             client_surface: latches.client_surface,
+            present_stats_sink: latches.present_stats_sink,
+            presents_taken: AtomicU32::new(carried.present_count),
+            refresh_period_bits: AtomicU64::new(0),
+            last_shown_bits: AtomicU64::new(0),
+            shown_refresh_count: AtomicU32::new(carried.refresh_count),
             #[cfg(not(feature = "native-host"))]
             client_view_watch: AtomicUsize::new(0),
             attached_at: Instant::now(),
@@ -518,6 +555,24 @@ impl Attachment {
             .store(seconds.to_bits(), Ordering::Relaxed);
     }
 
+    /// Number the next present the presenter took for this view: 1 for the first.
+    pub fn take_present(&self) -> u32 {
+        self.presents_taken
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
+    }
+
+    /// The seconds between two refreshes of the display under the window, `0.0` = unknown.
+    #[must_use]
+    pub fn refresh_period_sec(&self) -> f64 {
+        f64::from_bits(self.refresh_period_bits.load(Ordering::Relaxed))
+    }
+
+    pub fn set_refresh_period(&self, seconds: f64) {
+        self.refresh_period_bits
+            .store(seconds.to_bits(), Ordering::Relaxed);
+    }
+
     /// When the next paced present into this window may go while the compositor shows none of it.
     ///
     /// What [`next_unshown_release`] answers for the previous release and the
@@ -591,6 +646,101 @@ impl Attachment {
     pub fn present_settled(&self, geometry: PresentGeometry) -> bool {
         self.present_streak.settled(geometry)
     }
+}
+
+/// The display refreshes from a present shown at `earlier` to one shown at `later`, in seconds.
+///
+/// The gap over the refresh period, rounded, and at least one, since the
+/// display never shows two presents of one window on one refresh. An unknown
+/// period (`0.0`) counts each shown present as the next refresh.
+#[must_use]
+pub fn refreshes_between(earlier: f64, later: f64, refresh_period: f64) -> u32 {
+    if refresh_period <= 0.0 {
+        return 1;
+    }
+    bounded_cast::f64_to_u32_saturating(((later - earlier) / refresh_period).round()).max(1)
+}
+
+/// Publish into the record's PE-side statistics that the display showed present `number`.
+///
+/// `presented_time` is the drawable's `presentedTime`. The refresh count
+/// advances by the refreshes since the last shown present, and the refresh's
+/// `QueryPerformanceCounter` time comes from the native host, 0 where there
+/// is none. A record that was unregistered, that has no sink, or a present
+/// older than the last one published (presented handlers may run out of
+/// order across Metal's threads) publishes nothing.
+pub fn publish_shown_present(att: &Arc<Attachment>, number: u32, presented_time: f64) {
+    // The host's clock is read before the lock, which guards a lookup and
+    // a few atomics alone.
+    let qpc = sync_qpc(presented_time);
+    let map = lock();
+    if att.present_stats_sink == 0 || !is_live(&map, att) {
+        return;
+    }
+    let last = f64::from_bits(att.last_shown_bits.load(Ordering::Relaxed));
+    if presented_time <= last {
+        return;
+    }
+    let counted = att.shown_refresh_count.load(Ordering::Relaxed);
+    let refreshes = if last > 0.0 {
+        counted.wrapping_add(refreshes_between(
+            last,
+            presented_time,
+            att.refresh_period_sec(),
+        ))
+    } else {
+        counted.wrapping_add(1)
+    };
+    att.last_shown_bits
+        .store(presented_time.to_bits(), Ordering::Relaxed);
+    att.shown_refresh_count.store(refreshes, Ordering::Relaxed);
+    // SAFETY: the PE side backs this address with a `PresentStatsSink` in a
+    // box it keeps at that address until after the teardown thunk that
+    // unregisters this record has returned; the record is live under the
+    // registry lock, so the box is still there, and the lock makes this the
+    // sink's one writer. The sink is atomics alone, laid out alike in both
+    // images.
+    let sink = unsafe { &*(att.present_stats_sink as *const PresentStatsSink) };
+    sink.publish(&PresentStats {
+        present_count: number,
+        refresh_count: refreshes,
+        sync_qpc: qpc,
+    });
+}
+
+/// Where a new record's present numbering and refresh count start: where the device's left off.
+///
+/// A device that moves to another window attaches again and keeps its sink,
+/// and its `Present` calls keep counting, so the new record carries on from
+/// the presents the API side counted and the refreshes the last record
+/// published rather than starting both over. Zero for a device's first
+/// attach, and with no sink.
+fn carried_present_stats(sink: usize) -> PresentStats {
+    if sink == 0 {
+        return PresentStats::default();
+    }
+    // SAFETY: the PE side backs this address with a `PresentStatsSink` in a
+    // box it keeps at that address for the device's life, and the device is
+    // attaching, so the box is there.
+    let sink = unsafe { &*(sink as *const PresentStatsSink) };
+    PresentStats {
+        present_count: sink.last_present_count(),
+        ..sink.read()
+    }
+}
+
+/// The application's `QueryPerformanceCounter` at `presented_time`, from the native host.
+#[cfg(feature = "native-host")]
+fn sync_qpc(presented_time: f64) -> u64 {
+    mtld3d_core::native_host::get()
+        .and_then(|host| host.performance_counter(presented_time))
+        .unwrap_or(0)
+}
+
+/// Unknown under Wine: 0, which `D3DPRESENTSTATS` reads as no time.
+#[cfg(not(feature = "native-host"))]
+const fn sync_qpc(_presented_time: f64) -> u64 {
+    0
 }
 
 fn lock() -> std::sync::MutexGuard<'static, FxHashMap<usize, Arc<Attachment>>> {

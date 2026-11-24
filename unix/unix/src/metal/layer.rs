@@ -101,6 +101,8 @@ pub struct LayerAttachRequest {
     /// Where a client surface present request is written on the PE side, `0` = nowhere.
     #[cfg(not(feature = "native-host"))]
     pub client_surface_request_sink_ptr: u64,
+    /// Where the present statistics of the shown drawables are published, `0` = nowhere.
+    pub present_stats_sink_ptr: u64,
     /// `cursor.software`, resolved here against the layer mode attach picks.
     pub software_cursor: SoftwareCursorPolicy,
 }

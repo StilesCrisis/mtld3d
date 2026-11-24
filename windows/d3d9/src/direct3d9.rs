@@ -2347,6 +2347,7 @@ pub fn attach_metal_layer(
         software_cursor_active: 0,
         cursor_kick_ptr: sinks.cursor_kick_ptr(),
         client_surface_request_ptr: sinks.client_surface_request_ptr(),
+        present_stats_ptr: sinks.present_stats_ptr(),
     };
     if hwnd != 0 {
         unix_call(&mut layer_params);
