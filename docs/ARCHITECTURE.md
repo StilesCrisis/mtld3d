@@ -322,7 +322,14 @@ The ordinary frame boundary carries typed D3D9 operations through
 compilation call native handlers without another PE crossing.
 
 Lifecycle, shader registration, synchronous controls and readbacks have
-explicit thunks. `SetCursorOverlay` retains its coalesced main-queue update;
+explicit thunks. A `GetRenderTargetData` into a standalone system-memory
+surface is queued rather than waited for (`QueueReadback`): the blit is
+committed and its ticket kept on the surface, and `AwaitReadback` waits for it
+the first time the surface's memory is read, written, read back into again or
+freed (`SurfaceInner::settle_readback`). D3D9 promises those pixels only
+then, and a game that reads one surface back each frame while locking the one
+it read the frame before (IIDX's frame capture) keeps the GPU working instead
+of draining it every frame. Every other readback stays synchronous. `SetCursorOverlay` retains its coalesced main-queue update;
 `SetPresentWaitPolicy` can wake presentation before an API-side synchronous
 flush waits behind the encoder. These controls do not justify per-draw
 crossings or moving native translation back onto the API thread.

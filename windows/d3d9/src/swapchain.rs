@@ -596,7 +596,7 @@ extern "system" fn swapchain_get_present_stats(
 }
 
 /// A `LARGE_INTEGER` as its `LowPart` and `HighPart` words.
-fn split_large_integer(value: u64) -> [u32; 2] {
+const fn split_large_integer(value: u64) -> [u32; 2] {
     let [b0, b1, b2, b3, b4, b5, b6, b7] = value.to_le_bytes();
     [
         u32::from_le_bytes([b0, b1, b2, b3]),
