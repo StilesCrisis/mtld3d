@@ -248,8 +248,8 @@ pub fn set_display_sync_enabled(
 /// back, so a vsync'd present goes out on a refresh, as on Windows: every
 /// frame is on screen for whole refreshes. With no frame cap such a present
 /// carries no minimum duration ([`Attachment::display_paces_presents`]): one
-/// of exactly a refresh period lost a refresh whenever a frame's earliest
-/// allowed time landed just past a refresh. With vsync off (an
+/// of exactly a refresh period can only cost a refresh, when a frame's
+/// earliest allowed time lands just past one. With vsync off (an
 /// `IMMEDIATE` interval) a drawable goes out as soon as it is ready. The
 /// Wine build keeps display sync off and paces by the duration alone. Call
 /// inside a transaction.
