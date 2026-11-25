@@ -218,9 +218,7 @@ allocator owners and PE function pointers are never executed or destroyed by
 the native worker.
 
 A native submit thread per device replays and commits the encoder's finished
-`FramePayload`, overlapping the next frame's encoding. The encoder, submit and presenter threads run in the
-user-interactive QoS class (`thread_qos.rs`): a read-back or a query poll on the API thread waits for them,
-and at the default class the scheduler can hold them off a core for a whole refresh. Two payloads ping-pong
+`FramePayload`, overlapping the next frame's encoding. Two payloads ping-pong
 over a capacity-one work channel. Backend calls use the native dispatch
 helpers directly, preserving each handler's autorelease pool without entering
 Wine's PE/Unix dispatcher. Rare synchronous submits (`Reset`, mid-frame

@@ -484,10 +484,7 @@ pub fn spawn(record: &Arc<DeviceRecord>) -> bool {
     let queue = record.queue();
     let spawned = thread::Builder::new()
         .name("mtld3d-present".to_owned())
-        .spawn(move || {
-            crate::thread_qos::frame_critical_thread();
-            presenter_main(&worker, queue);
-        });
+        .spawn(move || presenter_main(&worker, queue));
     let handle = match spawned {
         Ok(handle) => handle,
         Err(error) => {
