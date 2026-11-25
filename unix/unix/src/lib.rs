@@ -16,6 +16,7 @@ mod metal;
 mod shader_prewarm;
 mod shader_programs;
 mod stack_page;
+mod thread_qos;
 mod translation;
 
 /// `log` target used by every call inside this crate.
@@ -76,6 +77,16 @@ macro_rules! arp {
         }
         arp_wrap as UnixCallFn
     }};
+}
+
+/// Choose the frame threads' priority (encoder, submit, presenter).
+///
+/// `true` for high (the user-interactive class), `false` for normal. A native
+/// host build's `d3d9metal_set_frame_thread_priority`; threads started
+/// afterwards take it.
+#[cfg(feature = "native-host")]
+pub fn set_frame_thread_priority(high: bool) {
+    thread_qos::set_frame_thread_priority(high);
 }
 
 /// Run the handler of thunk `code` in process: a native host build's `unix_call`.

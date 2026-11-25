@@ -126,6 +126,15 @@ int d3d9metal_init(const D3D9MetalHost *host);
  */
 void *d3d9metal_Direct3DCreate9(unsigned sdk_version);
 
+/*
+ * The priority of the threads that produce frames (the encoder, submit and
+ * presenter threads): non-zero for high, the user-interactive QoS class, the
+ * last to be held off a core (macOS still picks the cores); 0 for normal, the
+ * default class. Call it before creating a device: each of those threads
+ * takes the choice when it starts.
+ */
+void d3d9metal_set_frame_thread_priority(unsigned high);
+
 #ifdef __cplusplus
 }
 #endif

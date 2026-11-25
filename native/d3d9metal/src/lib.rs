@@ -44,6 +44,16 @@ pub unsafe extern "C" fn d3d9metal_init(host: *const NativeHost) -> i32 {
     D3D9METAL_OK
 }
 
+/// `d3d9metal_set_frame_thread_priority`: the frame threads' priority.
+///
+/// The encoder, submit and presenter threads at high priority (non-zero: the
+/// user-interactive class) or normal (0, the default). Call it before the
+/// device is created: its threads take it when they start.
+#[unsafe(no_mangle)]
+pub extern "C" fn d3d9metal_set_frame_thread_priority(high: u32) {
+    mtld3d_unix::set_frame_thread_priority(high != 0);
+}
+
 /// `d3d9metal_Direct3DCreate9`: an `IDirect3D9`, or null before `d3d9metal_init`.
 #[unsafe(export_name = "d3d9metal_Direct3DCreate9")]
 #[must_use]
