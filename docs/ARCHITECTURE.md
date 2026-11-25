@@ -128,13 +128,7 @@ static: one process has one host application):
   on one window share its layer and either can go first, and leaves the
   window, its screen and the cursor to the host. No `AppKit` object is touched, nothing hops to
   the main thread, and the presenter resizes the drawable to the layer's
-  bounds as in the Wine build. Unlike the Wine build, the layer's
-  `displaySyncEnabled` follows the guest's vsync request (attach, and the
-  `SetDisplaySyncEnabled` of a Reset): the host owns its window, so a vsync'd
-  present goes out on a display refresh as on Windows, the minimum duration
-  only keeps two frames off one refresh, and the frame-latency bound waits on
-  the display's own cadence. A game that times itself by its presents (a
-  rhythm game measuring the refresh rate) needs that cadence exact.
+  bounds as in the Wine build.
 - `alloc_app` and `free_app` back every `PageBox` a `Lock` can hand out, since
   a host that runs the application in an address window of its own can reach
   nothing else. The runtime's own pages, and the upload snapshots, take the

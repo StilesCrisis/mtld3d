@@ -50,10 +50,7 @@ use super::layer::{
     DisplayCaps, LayerAttachRequest, PresentPacing, min_present_duration, pack_pacing,
     sync_drawable_size, unpack_pacing,
 };
-use crate::{
-    LOG_TARGET,
-    metal::handle::{IntoRetained, IntoRetainedLayer},
-};
+use crate::{LOG_TARGET, metal::handle::IntoRetained};
 
 #[path = "macdrv/attachment.rs"]
 pub mod attachment;
@@ -121,7 +118,7 @@ pub fn attach_metal_layer(
             "cursor: cursor.software on a native host: the host draws its own cursor",
         );
     }
-    configure_layer(&layer, &device, pacing.vsync_requested);
+    configure_layer(&layer, &device);
     let layer_addr = Retained::as_ptr(&layer) as usize;
     let panel_hz = host.display_modes().first().map_or(60, |&(_, _, hz)| hz);
     let min_duration = min_present_duration(f64::from(panel_hz), &pacing);
@@ -221,14 +218,6 @@ pub fn set_display_sync_enabled(
         return;
     };
     att.set_pacing_bits(pack_pacing(pacing));
-    // The host keeps the layer alive while a device presents into it, and
-    // the device resetting is one.
-    if let Some(layer) = IntoRetainedLayer::into_retained(layer_handle) {
-        CATransaction::begin();
-        CATransaction::setDisableActions(true);
-        set_layer_display_sync(&layer, pacing.vsync_requested);
-        CATransaction::commit();
-    }
     info!(
         target: LOG_TARGET,
         "present: layer {addr:#x} re-paced (vsync {}, maxFps {})",
@@ -238,23 +227,6 @@ pub fn set_display_sync_enabled(
     if att.request_refresh() {
         run_on_main_thread_async(move || refresh_attachment_on_main(&att));
     }
-}
-
-/// Have the host layer show each drawable on a display refresh when the guest asked for vsync.
-///
-/// The host owns its window and nothing composites it behind the layer's
-/// back, so a vsync'd present goes out on a refresh, as on Windows: every
-/// frame is on screen for whole refreshes, and the present's minimum
-/// duration (`presentDrawable:afterMinimumDuration:`, one refresh of the
-/// panel) only keeps two frames off one refresh. With vsync off (an
-/// `IMMEDIATE` interval) a drawable goes out as soon as it is ready. The
-/// Wine build keeps display sync off and paces by the duration alone. Call
-/// inside a transaction.
-fn set_layer_display_sync(layer: &CAMetalLayer, display_sync: bool) {
-    #[cfg(target_os = "macos")]
-    layer.setDisplaySyncEnabled(display_sync);
-    #[cfg(not(target_os = "macos"))]
-    let _ = (layer, display_sync);
 }
 
 /// The cursor is the host's: no overlay is drawn, and the request is refused.
@@ -301,12 +273,9 @@ fn refresh_attachment_on_main(att: &Arc<Attachment>) {
 }
 
 /// Configure a host layer for the device, in an explicit transaction on the calling thread.
-///
-/// `display_sync` is the guest's vsync request; see [`set_layer_display_sync`].
 fn configure_layer(
     layer: &CAMetalLayer,
     device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
-    display_sync: bool,
 ) {
     CATransaction::begin();
     CATransaction::setDisableActions(true);
@@ -316,7 +285,9 @@ fn configure_layer(
     // Nothing reads the drawable: every guest read of the frame goes to the
     // back-buffer texture, and present writes it through render passes.
     layer.setFramebufferOnly(true);
-    set_layer_display_sync(layer, display_sync);
+    // Pacing rides `presentDrawable:afterMinimumDuration:`, as in the Wine build.
+    #[cfg(target_os = "macos")]
+    layer.setDisplaySyncEnabled(false);
     layer.setMaximumDrawableCount(DRAWABLE_POOL_DEPTH);
     layer.setAllowsNextDrawableTimeout(true);
     layer.setPresentsWithTransaction(false);
