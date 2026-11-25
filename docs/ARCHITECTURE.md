@@ -131,12 +131,9 @@ static: one process has one host application):
   bounds as in the Wine build. Unlike the Wine build, the layer's
   `displaySyncEnabled` follows the guest's vsync request (attach, and the
   `SetDisplaySyncEnabled` of a Reset): the host owns its window, so a vsync'd
-  present goes out on a display refresh as on Windows, and the frame-latency
-  bound waits on the display's own cadence. With no frame cap such a present
-  carries no minimum duration (`Attachment::display_paces_presents`): with
-  display sync on, one of exactly a refresh period can only cost a refresh,
-  when a frame's earliest allowed time lands just past one. A game that times
-  itself by its presents (a
+  present goes out on a display refresh as on Windows, the minimum duration
+  only keeps two frames off one refresh, and the frame-latency bound waits on
+  the display's own cadence. A game that times itself by its presents (a
   rhythm game measuring the refresh rate) needs that cadence exact.
 - `alloc_app` and `free_app` back every `PageBox` a `Lock` can hand out, since
   a host that runs the application in an address window of its own can reach

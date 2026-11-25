@@ -50,7 +50,7 @@ use rustc_hash::FxHashMap;
 
 use crate::metal::{
     command::{GeometryStreak, PresentGeometry},
-    layer::{bounded_cast, unpack_pacing},
+    layer::bounded_cast,
 };
 
 /// How many presents may pass between headroom refreshes.
@@ -293,12 +293,6 @@ pub struct Attachment {
     current_backing_scale: AtomicU32,
     /// Consecutive presents at one geometry; gates the `MetalFX` route.
     present_streak: GeometryStreak,
-    /// Whether the layer shows each drawable on a display refresh (`displaySyncEnabled`).
-    ///
-    /// Set by a native host's attach and Reset when the guest asked for
-    /// vsync; the Wine build leaves it off. With it on, a vsync'd present
-    /// needs no minimum duration ([`Attachment::display_paces_presents`]).
-    display_synced: AtomicBool,
     /// Whether the present pass applies this layer's gamma ramp.
     ///
     /// The ramp's 256 entries live in `metal::gamma`, which owns them for as
@@ -351,28 +345,8 @@ impl Attachment {
             present_pacing_bits: AtomicU64::new(latches.pacing_bits),
             current_backing_scale: AtomicU32::new(latches.backing_scale),
             present_streak: GeometryStreak::new(),
-            display_synced: AtomicBool::new(false),
             gamma_active: AtomicBool::new(false),
         }
-    }
-
-    /// Record whether the layer shows each drawable on a display refresh; a native host's alone.
-    #[cfg(any(feature = "native-host", test))]
-    pub fn set_display_synced(&self, synced: bool) {
-        self.display_synced.store(synced, Ordering::Relaxed);
-    }
-
-    /// Whether the display alone paces this window's presents, with no minimum duration.
-    ///
-    /// True when the layer is display-synced and no frame cap is set: each
-    /// present goes out on the first refresh after it is ready, and a minimum
-    /// duration of one refresh period would only cost refreshes, since a
-    /// present whose earliest allowed time lands a hair after a refresh waits
-    /// for the next one and the frame before it is shown twice.
-    #[must_use]
-    pub fn display_paces_presents(&self) -> bool {
-        self.display_synced.load(Ordering::Relaxed)
-            && unpack_pacing(self.present_pacing_bits.load(Ordering::Relaxed)).max_fps == 0
     }
 
     /// Whether this layer's present pass applies a gamma ramp.

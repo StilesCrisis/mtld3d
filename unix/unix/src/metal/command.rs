@@ -977,13 +977,9 @@ pub fn encode_present(
     // sub-max cadence we sustain under the cap, so fractional
     // production rates display at their actual rate. `0.0` means
     // free-run (D3DPRESENT_INTERVAL_IMMEDIATE) — drop the throttle.
-    // A display-synced layer with no frame cap is paced by the
-    // display alone: the present still waits for it (it is paced),
-    // but carries no minimum duration to slip a refresh by.
     let drawable_obj = ProtocolObject::from_ref(drawable);
     let min_duration = attachment.map_or(0.0, |att| att.min_present_duration_sec());
-    let display_paced = attachment.is_some_and(|att| att.display_paces_presents());
-    if min_duration > 0.0 && !display_paced {
+    if min_duration > 0.0 {
         cmd_buf.presentDrawable_afterMinimumDuration(drawable_obj, min_duration);
     } else {
         cmd_buf.presentDrawable(drawable_obj);

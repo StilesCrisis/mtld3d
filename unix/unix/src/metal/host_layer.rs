@@ -147,7 +147,6 @@ pub fn attach_metal_layer(
     );
     att.set_min_present_duration(min_duration);
     att.set_refresh_period(1.0 / f64::from(panel_hz));
-    att.set_display_synced(pacing.vsync_requested);
     attachment::publish_backing_scale(&att, 1);
     info!(
         target: LOG_TARGET,
@@ -230,7 +229,6 @@ pub fn set_display_sync_enabled(
         set_layer_display_sync(&layer, pacing.vsync_requested);
         CATransaction::commit();
     }
-    att.set_display_synced(pacing.vsync_requested);
     info!(
         target: LOG_TARGET,
         "present: layer {addr:#x} re-paced (vsync {}, maxFps {})",
@@ -246,10 +244,9 @@ pub fn set_display_sync_enabled(
 ///
 /// The host owns its window and nothing composites it behind the layer's
 /// back, so a vsync'd present goes out on a refresh, as on Windows: every
-/// frame is on screen for whole refreshes. With no frame cap such a present
-/// carries no minimum duration ([`Attachment::display_paces_presents`]): one
-/// of exactly a refresh period can only cost a refresh, when a frame's
-/// earliest allowed time lands just past one. With vsync off (an
+/// frame is on screen for whole refreshes, and the present's minimum
+/// duration (`presentDrawable:afterMinimumDuration:`, one refresh of the
+/// panel) only keeps two frames off one refresh. With vsync off (an
 /// `IMMEDIATE` interval) a drawable goes out as soon as it is ready. The
 /// Wine build keeps display sync off and paces by the duration alone. Call
 /// inside a transaction.

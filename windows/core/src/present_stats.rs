@@ -24,7 +24,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering, fence};
 /// One publication: the last present the display showed.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct PresentStats {
-    /// The number of the present shown, from 1 in the order the game made them; 0 = none yet.
+    /// The number of the present shown, counted from 1 in the order the game made them; 0 = none yet.
     pub present_count: u32,
     /// The display refreshes counted up to the one the present was shown on.
     pub refresh_count: u32,
