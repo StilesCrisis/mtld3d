@@ -998,3 +998,26 @@ fn a_shown_present_publishes_the_refresh_it_went_out_on() {
         "nothing is published once the record is gone"
     );
 }
+
+/// The display alone paces a window's presents only when its layer is display-synced and uncapped.
+#[test]
+fn only_an_uncapped_display_synced_layer_is_paced_by_the_display_alone() {
+    let view = test_address_block();
+    let att = register(view, view + 8, &latches(AttachFlags::empty(), 1, None));
+    att.set_pacing_bits(pack_pacing(&PresentPacing {
+        vsync_requested: true,
+        max_fps: 0,
+    }));
+    assert!(!att.display_paces_presents(), "the Wine build leaves display sync off");
+    att.set_display_synced(true);
+    assert!(att.display_paces_presents(), "vsync with display sync and no cap");
+    att.set_pacing_bits(pack_pacing(&PresentPacing {
+        vsync_requested: true,
+        max_fps: 60,
+    }));
+    assert!(
+        !att.display_paces_presents(),
+        "a frame cap keeps its minimum duration"
+    );
+    unregister(view);
+}

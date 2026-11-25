@@ -55,7 +55,9 @@ and no game breaks, speed wins. Those trades are listed in
   present. Unlike pacing the game's thread or enabling display sync on the
   Metal layer, this works with ProMotion: the panel follows whatever rate the
   game sustains below its maximum. Vsync follows the game's present interval;
-  the frame cap is off by default.
+  the frame cap is off by default. The native host build (`native/`) turns
+  display sync on for a vsync'd present instead, so each frame goes out on a
+  refresh, which a game that times itself by its presents needs.
 - **Upscaling.** Off by default. The game can render below the presented size
   and have MetalFX's spatial scaler upscale the result. A mip LOD bias, on by
   default, keeps texture detail at the presented size; turned off, textures
