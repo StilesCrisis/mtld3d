@@ -16,6 +16,7 @@ mod metal;
 mod shader_prewarm;
 mod shader_programs;
 mod stack_page;
+mod thread_qos;
 mod translation;
 
 /// `log` target used by every call inside this crate.

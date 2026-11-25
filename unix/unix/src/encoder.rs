@@ -9229,7 +9229,10 @@ impl SubmitSpawner for NativeSubmitSpawner {
     ) -> std::io::Result<thread::JoinHandle<()>> {
         thread::Builder::new()
             .name("mtld3d-submit".into())
-            .spawn(work)
+            .spawn(move || {
+                crate::thread_qos::frame_critical_thread();
+                work();
+            })
     }
 }
 
@@ -9296,6 +9299,7 @@ impl EncoderThread {
         let handle = thread::Builder::new()
             .name("mtld3d-encoder".into())
             .spawn(move || {
+                crate::thread_qos::frame_critical_thread();
                 encoder_thread_main(&receiver, &prewarm_rx, ready_tx, &startup, move |startup| {
                     FrameEncoder::new(
                         gpu_caps,
