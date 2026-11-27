@@ -1715,14 +1715,6 @@ impl DeviceInner {
         &self.coherent_seq
     }
 
-    /// Wait until the draw work submitted at `seq` retired, without going through the encoder.
-    ///
-    /// Returns at once on a device with no frame signal: the caller checks
-    /// `coherent_seq` after and waits another way.
-    pub fn await_draw(&self, seq: u64) -> Result<(), i32> {
-        self.encoder.await_draw(seq)
-    }
-
     /// The highest seq whose submission failed on the GPU, 0 when none has.
     pub fn latest_failed_submit(&self) -> u64 {
         self.failed_submit_seq.load(Ordering::Acquire)

@@ -92,7 +92,6 @@ fn lifecycle_values_keep_their_wire_numbers_and_reject_other_integers() {
         EncoderControl::Reset,
         EncoderControl::RetireUploads,
         EncoderControl::AwaitFrame,
-        EncoderControl::AwaitDraw,
     ];
     for (index, control) in controls.into_iter().enumerate() {
         let raw = u32::try_from(index).unwrap();
@@ -105,7 +104,7 @@ fn lifecycle_values_keep_their_wire_numbers_and_reject_other_integers() {
             Err(WireError::InvalidValue)
         ));
     }
-    for raw in [6, 7, u32::from(u16::MAX), u32::MAX] {
+    for raw in [5, 6, u32::from(u16::MAX), u32::MAX] {
         assert!(matches!(
             EncoderControl::try_from(raw),
             Err(WireError::InvalidValue)
