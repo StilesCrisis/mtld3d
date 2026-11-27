@@ -22,7 +22,11 @@
 
 use std::{
     cell::Cell,
-    sync::atomic::{AtomicU64, Ordering},
+    collections::VecDeque,
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// The host's choice, `num / den` ns per tick; `den == 0` means none.
@@ -53,6 +57,54 @@ pub fn set_next_present_at(ns: u64) {
 #[must_use]
 pub fn take_next_present_at() -> u64 {
     NEXT_PRESENT_AT.with(Cell::take)
+}
+
+/// A frame the host named a time for, as the display took it.
+///
+/// `#[repr(C)]`: the host reads these through `d3d9metal_take_presented`.
+#[repr(C)]
+#[derive(Debug, Default, PartialEq)]
+pub struct Shown {
+    /// The time the host named for the frame (`d3d9metal_present_at`), host-clock nanoseconds.
+    pub present_at_ns: u64,
+    /// When the display showed it.
+    ///
+    /// `presentedTime`, in `CACurrentMediaTime` seconds; 0 when it was not
+    /// shown: a newer frame was due first, or the display let it go.
+    pub presented_s: f64,
+}
+
+/// The records a host has not taken yet, at most this many (the oldest go first).
+pub const SHOWN_CAPACITY: usize = 4096;
+
+/// What the display did with the frames the host named a time for, oldest first.
+///
+/// A static because the caller has no object to reach: the host drains it
+/// through `d3d9metal_take_presented`, which names no device, while a
+/// presenter's completion handlers add to it.
+static SHOWN: Mutex<VecDeque<Shown>> = Mutex::new(VecDeque::new());
+
+/// Record what the display did with a frame the host named a time for.
+pub fn note_shown(present_at_ns: u64, presented_s: f64) {
+    let mut shown = SHOWN.lock().unwrap_or_else(PoisonError::into_inner);
+    if shown.len() >= SHOWN_CAPACITY {
+        shown.pop_front();
+    }
+    shown.push_back(Shown {
+        present_at_ns,
+        presented_s,
+    });
+}
+
+/// Move up to `out.len()` records, oldest first, into `out`; the number moved.
+pub fn take_shown(out: &mut [Shown]) -> usize {
+    let mut shown = SHOWN.lock().unwrap_or_else(PoisonError::into_inner);
+    let n = out.len().min(shown.len());
+    for (slot, record) in out.iter_mut().zip(shown.drain(..n)) {
+        *slot = record;
+    }
+    drop(shown);
+    n
 }
 
 /// A present clock's period, `num / den` ns.

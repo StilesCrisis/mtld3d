@@ -74,6 +74,28 @@ pub extern "C" fn d3d9metal_present_at(host_time_ns: u64) {
     mtld3d_shared::present_clock::set_next_present_at(host_time_ns);
 }
 
+/// `d3d9metal_take_presented`: what the display did with the frames the host named a time for.
+///
+/// Moves up to `cap` records, oldest first, into `out` and returns how many:
+/// each frame's time (`d3d9metal_present_at`) and its `presentedTime`, 0 when
+/// it was not shown.
+///
+/// # Safety
+///
+/// `out` must be valid for `cap` writes of `D3D9MetalShown`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn d3d9metal_take_presented(
+    out: *mut mtld3d_shared::present_clock::Shown,
+    cap: u32,
+) -> u32 {
+    if out.is_null() || cap == 0 {
+        return 0;
+    }
+    // SAFETY: the caller guarantees `out` holds `cap` records.
+    let out = unsafe { core::slice::from_raw_parts_mut(out, cap as usize) };
+    u32::try_from(mtld3d_shared::present_clock::take_shown(out)).unwrap_or(u32::MAX)
+}
+
 /// `d3d9metal_Direct3DCreate9`: an `IDirect3D9`, or null before `d3d9metal_init`.
 #[unsafe(export_name = "d3d9metal_Direct3DCreate9")]
 #[must_use]

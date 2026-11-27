@@ -35,7 +35,7 @@ use mtld3d_shared::{mtl_handle::MTLCommandQueueKind, perf::NanosSetTimer};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
-    MTLCommandQueue, MTLDevice, MTLEvent, MTLOrigin, MTLSize, MTLTexture,
+    MTLCommandQueue, MTLDevice, MTLDrawable, MTLEvent, MTLOrigin, MTLSize, MTLTexture,
 };
 use objc2_quartz_core::CAMetalLayer;
 
@@ -271,6 +271,9 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
             break;
         }
         let older = inner.pending.pop_front().expect("more than one is waiting");
+        if older.present_at_ns != 0 {
+            mtld3d_shared::present_clock::note_shown(older.present_at_ns, 0.0);
+        }
         if let Some(att) = attachment.as_deref() {
             att.take_present();
         }
@@ -324,6 +327,9 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
         slot.shown = seq;
     }
     resolve_when_presented(&drawable, None, attachment, false, number);
+    if present_at_ns != 0 {
+        note_when_shown(&drawable, present_at_ns);
+    }
     super::super::upscale::retire_evicted(&cb, record.upscale());
     let present_ptr = state.present_retired_ptr();
     let owner = std::sync::Arc::clone(record);
@@ -362,6 +368,23 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
     state.submit_cv.notify_all();
     drop(packet);
     true
+}
+
+/// Record, for the host, when the display shows a frame it named a time for.
+fn note_when_shown(
+    drawable: &ProtocolObject<dyn objc2_quartz_core::CAMetalDrawable>,
+    present_at_ns: u64,
+) {
+    let handler = RcBlock::new(
+        move |drawable: core::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
+            // SAFETY: Metal invokes the block with the presented drawable;
+            // the pointer is valid for the handler's duration.
+            let presented_s = unsafe { drawable.as_ref() }.presentedTime();
+            mtld3d_shared::present_clock::note_shown(present_at_ns, presented_s);
+        },
+    );
+    // SAFETY: objc2 typed binding; Metal copies (retains) the block on registration.
+    unsafe { drawable.addPresentedHandler(RcBlock::as_ptr(&handler)) };
 }
 
 /// The host's clock now, in the nanoseconds a `present_at_ns` counts (`mach_absolute_time`'s base).

@@ -154,6 +154,18 @@ void d3d9metal_set_present_clock(uint64_t num, uint64_t den);
  */
 void d3d9metal_present_at(uint64_t host_time_ns);
 
+/* What the display did with a frame the host named a time for. */
+typedef struct D3D9MetalShown {
+    uint64_t present_at_ns; /* the time d3d9metal_present_at named */
+    double presented_s;     /* presentedTime (CACurrentMediaTime seconds); 0: not shown */
+} D3D9MetalShown;
+
+/*
+ * Moves up to cap records, oldest first, into out and returns how many. The
+ * library keeps the last 4096 the host has not taken.
+ */
+uint32_t d3d9metal_take_presented(D3D9MetalShown *out, uint32_t cap);
+
 #ifdef __cplusplus
 }
 #endif
