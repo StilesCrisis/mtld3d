@@ -923,6 +923,7 @@ fn test_submit_params(
         present_layer: MetalHandle::NULL,
         present_texture: MetalHandle::NULL,
         present_view: MetalHandle::NULL,
+        present_at_ns: 0,
         submit_seq: 2,
         // SAFETY: each test drains its callbacks before these counters leave scope.
         draw_retirement: unsafe { RetirementCounter::from_address(atomic_address(coherent)) },

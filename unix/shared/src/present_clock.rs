@@ -11,8 +11,19 @@
 //!
 //! The rate is a rational period, `num / den` nanoseconds, so a host can name
 //! a rate no whole number of hertz or nanoseconds expresses.
+//!
+//! The host can also name when a frame is shown: before a `Present`, the time
+//! on the host's clock (`mach_absolute_time` in nanoseconds, the base of
+//! `CACurrentMediaTime`) at which that frame's present should reach the
+//! display ([`set_next_present_at`], the host's `d3d9metal_present_at`). The
+//! `Present` takes it ([`take_next_present_at`]) and its frame is presented at
+//! that time rather than as soon as it is finished, so which refresh shows it
+//! depends on the host's schedule and not on how long the frame took.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    cell::Cell,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 /// The host's choice, `num / den` ns per tick; `den == 0` means none.
 ///
@@ -21,6 +32,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// and each device latches it at creation, where the state then lives.
 static NUM: AtomicU64 = AtomicU64::new(0);
 static DEN: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The next `Present` on this thread: when its frame is shown (0: as soon as it is finished).
+    ///
+    /// A static because the caller has no object to reach: the host sets it
+    /// on the thread about to call `Present`, before it reaches any device,
+    /// and that `Present` takes it onto its frame, where the state then lives.
+    static NEXT_PRESENT_AT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// When the calling thread's next `Present` shows its frame.
+///
+/// Host-clock nanoseconds (0: as soon as it is finished).
+pub fn set_next_present_at(ns: u64) {
+    NEXT_PRESENT_AT.with(|next| next.set(ns));
+}
+
+/// The time the host set for this thread's `Present`, cleared as it is taken (0: none).
+#[must_use]
+pub fn take_next_present_at() -> u64 {
+    NEXT_PRESENT_AT.with(Cell::take)
+}
 
 /// A present clock's period, `num / den` ns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,22 +78,4 @@ pub fn get() -> Option<PresentClock> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_clock_is_set_read_and_cleared() {
-        set(2_080 * 1_144 * 1_000_000_000, 285_500_000);
-        assert_eq!(
-            get(),
-            Some(PresentClock {
-                num: 2_379_520_000_000_000,
-                den: 285_500_000
-            })
-        );
-        set(0, 0);
-        assert_eq!(get(), None);
-        set(1_000_000_000, 0);
-        assert_eq!(get(), None, "a zero denominator names no clock");
-    }
-}
+mod tests;

@@ -64,6 +64,16 @@ pub extern "C" fn d3d9metal_set_present_clock(num: u64, den: u64) {
     mtld3d_shared::present_clock::set(num, den);
 }
 
+/// `d3d9metal_present_at`: when the calling thread's next `Present` shows its frame.
+///
+/// `mach_absolute_time` in nanoseconds (the base of `CACurrentMediaTime`); 0,
+/// or no call, shows it as soon as it is finished. Only a device made under
+/// the host's present clock (`d3d9metal_set_present_clock`) uses it.
+#[unsafe(no_mangle)]
+pub extern "C" fn d3d9metal_present_at(host_time_ns: u64) {
+    mtld3d_shared::present_clock::set_next_present_at(host_time_ns);
+}
+
 /// `d3d9metal_Direct3DCreate9`: an `IDirect3D9`, or null before `d3d9metal_init`.
 #[unsafe(export_name = "d3d9metal_Direct3DCreate9")]
 #[must_use]

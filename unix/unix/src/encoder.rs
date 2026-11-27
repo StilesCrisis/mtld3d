@@ -10324,6 +10324,11 @@ fn finalize_submit(
         } else {
             frame.view_handle()
         },
+        present_at_ns: if no_present {
+            0
+        } else {
+            frame.header().present_at_ns
+        },
         submit_seq: frame.header().submit_seq,
         // SAFETY: the device retains these atomics through encoder/submit joins,
         // committed GPU work, its completion callbacks and failed-submit cleanup.

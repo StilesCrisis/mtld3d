@@ -29,6 +29,7 @@ fn packet(seq: u64, slot: Option<usize>) -> PresentPacket {
         slot,
         view: 0,
         mark: None,
+        present_at_ns: 0,
         ready_at: Instant::now(),
     }
 }

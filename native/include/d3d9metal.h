@@ -145,6 +145,15 @@ void d3d9metal_set_frame_thread_priority(unsigned high);
  */
 void d3d9metal_set_present_clock(uint64_t num, uint64_t den);
 
+/*
+ * When the calling thread's next Present shows its frame, under the host's
+ * present clock: mach_absolute_time in nanoseconds (the base of
+ * CACurrentMediaTime). The frame is presented at that time (presentDrawable
+ * atTime:) rather than as soon as it is finished, so which display refresh
+ * shows it follows the host's schedule. 0, or no call, shows it when finished.
+ */
+void d3d9metal_present_at(uint64_t host_time_ns);
+
 #ifdef __cplusplus
 }
 #endif

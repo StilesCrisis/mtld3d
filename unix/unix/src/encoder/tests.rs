@@ -719,6 +719,7 @@ fn a_failed_submission_ends_the_frame_latency_wait() {
         present_layer: MetalHandle::NULL,
         present_texture: MetalHandle::NULL,
         present_view: MetalHandle::NULL,
+        present_at_ns: 0,
         submit_seq: 3,
         // SAFETY: the waiter's own reference keeps this atomic alive past the submission.
         draw_retirement: unsafe { RetirementCounter::from_address(Arc::as_ptr(&draw) as u64) },

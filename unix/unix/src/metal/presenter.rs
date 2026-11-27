@@ -183,6 +183,11 @@ pub struct PresentPacket {
     view: usize,
     /// The frame-latency mark of a paced present, resolved when it is presented or dropped.
     mark: Option<PacedMark>,
+    /// Under the host's present clock: when the frame is shown.
+    ///
+    /// Host-clock nanoseconds (`presentDrawable atTime:`); 0 shows it as soon
+    /// as it is finished.
+    present_at_ns: u64,
     /// When the frame was ready to present: the submit thread built the packet.
     ///
     /// Before the submit waits for the previous present to commit, so a
@@ -214,8 +219,14 @@ impl PresentPacket {
             slot: None,
             view,
             mark: None,
+            present_at_ns: 0,
             ready_at: Instant::now(),
         }
+    }
+
+    /// When the host's clock shows the frame (host-clock nanoseconds; 0: when finished).
+    pub const fn set_present_at(&mut self, ns: u64) {
+        self.present_at_ns = ns;
     }
 
     /// Give the packet the frame-latency mark of its paced present.
@@ -1045,6 +1056,7 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
             seq,
             drawable_wait_ns,
             host_clock: false,
+            present_at_ns: 0,
         },
     );
     // A present that waits for the display finishes its frame once it is on

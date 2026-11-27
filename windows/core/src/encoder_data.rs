@@ -1117,6 +1117,11 @@ pub struct FrameData {
     /// Carried into `SubmitDescription` so the unix `addCompletedHandler`
     /// knows which seq to broadcast.
     pub submit_seq: u64,
+    /// When the frame's present is shown, in host-clock nanoseconds (0: as soon as it is finished).
+    ///
+    /// Stamped by `DeviceInner::present` under a native host's present clock
+    /// (`mtld3d_shared::present_clock`), from the time the host set for it.
+    pub present_at_ns: u64,
     /// Raw pointer to the device's `Arc<AtomicU64>` coherent-seq.
     ///
     /// Stays valid for the device's lifetime (Arc is dropped after all frames
@@ -1269,6 +1274,7 @@ impl FrameData {
                 FrameDataFlags::empty()
             },
             submit_seq: 0,
+            present_at_ns: 0,
             coherent_seq_ptr: 0,
             upload_coherent_seq_ptr: 0,
             failed_submit_seq_ptr: 0,

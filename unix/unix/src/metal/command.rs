@@ -143,6 +143,19 @@ pub const PRESENT_LOG_TARGET: &str = "mtld3d::unix::present";
 
 /// A presented interval above this is a pause, not a hitch; it reseeds.
 const PRESENTED_MAX_INTERVAL_NS: u64 = 500_000_000;
+/// Nanoseconds in a second, for a host's present time in `CACurrentMediaTime`'s seconds.
+const NS_PER_SEC: u32 = 1_000_000_000;
+
+/// A host-clock time in nanoseconds as `CACurrentMediaTime`'s seconds.
+///
+/// Whole seconds and the nanoseconds past them, each exact in an `f64`; an
+/// uptime past `u32::MAX` seconds (136 years) saturates.
+fn host_seconds(ns: u64) -> f64 {
+    let per_sec = u64::from(NS_PER_SEC);
+    let whole = u32::try_from(ns / per_sec).unwrap_or(u32::MAX);
+    let part = u32::try_from(ns % per_sec).expect("a remainder below a second fits u32");
+    f64::from(whole) + f64::from(part) / f64::from(NS_PER_SEC)
+}
 /// Minimum excess over the typical presented interval for a hitch, ns.
 ///
 /// Applied on top of the 1.5x ratio, so jitter on a fast panel stays quiet
@@ -727,12 +740,10 @@ fn encode_frame(
         if let (Some(layer), Some(texture)) = (layer, texture) {
             let view = usize::try_from(params.present_view.raw())
                 .expect("a 64-bit host addresses every view pointer");
-            Some(super::presenter::PresentPacket::new(
-                params.submit_seq,
-                texture,
-                layer,
-                view,
-            ))
+            let mut packet =
+                super::presenter::PresentPacket::new(params.submit_seq, texture, layer, view);
+            packet.set_present_at(params.present_at_ns);
+            Some(packet)
         } else {
             mtld3d_shared::log_once_warn!(
                 target: LOG_TARGET,
@@ -848,6 +859,8 @@ pub struct PresentEncode<'a> {
     /// The presenter's `clock` module: the present carries no minimum
     /// duration, display sync alone.
     pub host_clock: bool,
+    /// When the host's clock shows it (host-clock nanoseconds; 0: as soon as it is finished).
+    pub present_at_ns: u64,
 }
 
 /// Encode the present of `args.source` into `drawable` and queue its presentation.
@@ -1017,7 +1030,10 @@ pub fn encode_present(
         attachment.map_or(0.0, |att| att.min_present_duration_sec())
     };
     let display_paced = attachment.is_some_and(|att| att.display_paces_presents());
-    if min_duration > 0.0 && !display_paced {
+    if args.present_at_ns != 0 {
+        // `CACurrentMediaTime`'s seconds: `mach_absolute_time`, which the host's time counts in ns.
+        cmd_buf.presentDrawable_atTime(drawable_obj, host_seconds(args.present_at_ns));
+    } else if min_duration > 0.0 && !display_paced {
         cmd_buf.presentDrawable_afterMinimumDuration(drawable_obj, min_duration);
     } else {
         cmd_buf.presentDrawable(drawable_obj);

@@ -2186,7 +2186,12 @@ impl DeviceInner {
         }
         self.apply_upload_answers();
         let new_frame = self.fresh_frame();
-        let (frame, seq) = self.stamp_and_swap(new_frame, false);
+        let (mut frame, seq) = self.stamp_and_swap(new_frame, false);
+        // Under the host's present clock the host may name when this frame is
+        // shown; the time it set for this thread's Present rides the frame.
+        if self.host_present_clock {
+            frame.present_at_ns = mtld3d_shared::present_clock::take_next_present_at();
+        }
 
         // The block we measure belongs to the frame that will next be
         // observed by the encoder — the one we just swapped in. The

@@ -55,6 +55,7 @@ unix/shared/src/mtl.rs VertexFormat Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
 unix/shared/src/mtl.rs VertexStepFunction Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
 unix/shared/src/mtl.rs VisibilityResultMode Clone,Copy,Debug,PartialEq,Eq,Hash,FromRepr
 unix/shared/src/params.rs VertexAttrDesc Clone,Copy,PartialEq,Eq
+unix/shared/src/present_clock.rs PresentClock Debug,Clone,Copy,PartialEq,Eq
 unix/shared/src/record_handle.rs DeviceRecordHandle Clone,Copy
 unix/shared/src/shader_create.rs DeclUsage Clone,Copy,Debug,PartialEq,Eq
 unix/unix/src/encoder.rs ClearQuadKey Hash,PartialEq,Eq,Clone,Copy

@@ -107,6 +107,7 @@ impl MetadataStorage {
             view_handle: frame.view_handle.raw(),
             depth_texture: frame.depth_texture.raw(),
             submit_seq: frame.submit_seq,
+            present_at_ns: frame.present_at_ns,
             perf,
             flags: u32::from(frame.flags.bits()),
             backbuffer_width: frame.backbuffer_width,

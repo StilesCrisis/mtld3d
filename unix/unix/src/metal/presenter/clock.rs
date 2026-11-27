@@ -54,7 +54,10 @@ use crate::{
 
 /// The log's rate: five decimals of a hertz, from a period in nanoseconds.
 const HZ_FRACTION: u128 = 100_000;
-const NS_PER_S: u128 = 1_000_000_000;
+const NS_PER_S: u128 = NS_PER_SEC as u128;
+
+/// Nanoseconds in a second.
+const NS_PER_SEC: u64 = 1_000_000_000;
 
 /// Slots a present-bearing frame copies into, under the host's clock.
 pub const CLOCK_SLOTS: usize = 4;
@@ -63,8 +66,10 @@ const _: () = assert!(
     "the slots are the snapshot ring's"
 );
 
-/// What a device presents with under the host's clock: the queue of its
-/// presents and the two events that order them against the render queue.
+/// What a device presents with under the host's clock.
+///
+/// The queue of its presents and the two events that order them against the
+/// render queue.
 pub struct ClockPresent {
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// Signalled by a frame's copy into its slot, with the frame's sequence.
@@ -73,19 +78,18 @@ pub struct ClockPresent {
     shown: Retained<ProtocolObject<dyn MTLEvent>>,
 }
 
-// allow: chosen narrow exception, as `PendingCmdBuf`'s. Apple documents
-// command queues as thread-safe (any thread creates command buffers on one)
-// and events as objects command buffers on any queue encode waits and signals
-// for; nothing here touches another surface of either.
-// SAFETY: see the comment above: `commandBuffer` on the queue and encoding the
-// events into a buffer are the only uses, from the submit and presenter threads.
-#[allow(clippy::non_send_fields_in_send_ty)]
+// SAFETY: Apple documents command queues as thread-safe (any thread creates
+// command buffers on one) and events as objects command buffers on any queue
+// encode waits and signals for. `commandBuffer` on the queue and encoding the
+// events into a buffer are the only uses, from the submit and presenter
+// threads; nothing here touches another surface of either.
 unsafe impl Send for ClockPresent {}
 // SAFETY: as above.
 unsafe impl Sync for ClockPresent {}
 
 impl ClockPresent {
-    /// The host's clock as this device latches it, with its queue and events;
+    /// The host's clock as this device latches it, with its queue and events.
+    ///
     /// `None` without a clock, or when Metal gives none of them (logged once).
     pub fn new(
         render_queue: mtld3d_shared::mtl_handle::MetalHandle<MTLCommandQueueKind>,
@@ -199,8 +203,11 @@ pub fn copy_for_present(
     true
 }
 
-/// One presenter iteration under the host's clock: a drawable, then the
-/// newest finished frame into it. `false` once the state is stopped.
+/// One presenter iteration under the host's clock.
+///
+/// A drawable, then the frame it shows: the oldest waiting one at the time the
+/// host gave it, or, for a frame without one, the newest finished. `false`
+/// once the state is stopped.
 pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent) -> bool {
     let state = record.present();
     let (layer, view) = {
@@ -249,8 +256,20 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
     };
 
     let mut inner = state.lock();
-    // The newest finished frame: any older one waiting gives way.
+    // A frame the host gave a time is presented at it, in order: an older one
+    // gives way only once a newer frame is already due, as it could no longer
+    // be shown at its own time. Any other frame: the newest finished one,
+    // older ones giving way.
+    let now_ns = host_now_ns();
     while inner.pending.len() > 1 {
+        let next_due = inner.pending.get(1).map_or(0, |next| next.present_at_ns);
+        let scheduled = inner
+            .pending
+            .front()
+            .is_some_and(|front| front.present_at_ns != 0);
+        if scheduled && next_due > now_ns {
+            break;
+        }
         let older = inner.pending.pop_front().expect("more than one is waiting");
         if let Some(att) = attachment.as_deref() {
             att.take_present();
@@ -261,6 +280,7 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
         return true;
     };
     let seq = front.seq;
+    let present_at_ns = front.present_at_ns;
     let number = attachment
         .as_deref()
         .map(attachment::Attachment::take_present);
@@ -296,6 +316,7 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
             seq,
             drawable_wait_ns,
             host_clock: true,
+            present_at_ns,
         },
     );
     cb.encodeSignalEvent_value(&clock.shown, seq);
@@ -341,6 +362,17 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
     state.submit_cv.notify_all();
     drop(packet);
     true
+}
+
+/// The host's clock now, in the nanoseconds a `present_at_ns` counts (`mach_absolute_time`'s base).
+fn host_now_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: writes the clock's time into the local timespec.
+    unsafe { libc::clock_gettime(libc::CLOCK_UPTIME_RAW, &raw mut ts) };
+    u64::try_from(ts.tv_sec).unwrap_or(0) * NS_PER_SEC + u64::try_from(ts.tv_nsec).unwrap_or(0)
 }
 
 /// Drop every frame waiting: its window shows nothing, or no drawable came.

@@ -72,6 +72,8 @@ pub struct SubmitDescription {
     pub present_layer: MetalHandle<CAMetalLayerKind>,
     pub present_texture: MetalHandle<MTLTextureKind>,
     pub present_view: MetalHandle<NSViewKind>,
+    /// When the frame's present is shown, in host-clock nanoseconds (0: as soon as it is finished).
+    pub present_at_ns: u64,
     pub submit_seq: u64,
     pub draw_retirement: RetirementCounter,
     pub upload_retirement: RetirementCounter,
