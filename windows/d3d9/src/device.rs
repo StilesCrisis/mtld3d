@@ -10,11 +10,11 @@ pub use mtld3d_core::encoder_data::{
     ClearColorRectsOp, ClearDepthStencilOp, ClearDepthStencilRectsOp, ColorFillOp, DepthBinding,
     DestroyBufferOp, DestroyTextureOp, EndVisibilityOp, GenerateMipmapsOp,
     GenerateMipmapsOrderedOp, NoteColorReadOp, PendingVbibRetention, ReadColorHandleOp,
-    ReadDeviceBufferOp, ReadTextureColorHandleOp, ReadTextureHandleOp, ResolveDepthSurfaceOp,
-    ResolveDepthTextureOp, ResolveDynamicDepthOp, RetireColorOp, RetireDepthOp, RtBinding,
-    SetDumpDrawOp, SetVertexSamplerOp, SetVertexTextureOp, SetViewportOp, StretchBlitOp,
-    StretchKind, StretchSurfaceFlags, StretchSurfaceInfo, UnbindExtraColorOp, UpdateColorRegionOp,
-    UploadColorOp, UploadResampledOp, UploadTextureAndMipsOp, UploadTextureOp,
+    ReadColorToMemoryOp, ReadDeviceBufferOp, ReadTextureColorHandleOp, ReadTextureHandleOp,
+    ResolveDepthSurfaceOp, ResolveDepthTextureOp, ResolveDynamicDepthOp, RetireColorOp,
+    RetireDepthOp, RtBinding, SetDumpDrawOp, SetVertexSamplerOp, SetVertexTextureOp, SetViewportOp,
+    StretchBlitOp, StretchKind, StretchSurfaceFlags, StretchSurfaceInfo, UnbindExtraColorOp,
+    UpdateColorRegionOp, UploadColorOp, UploadResampledOp, UploadTextureAndMipsOp, UploadTextureOp,
     UploadTextureOpFlags,
 };
 
@@ -1713,6 +1713,19 @@ impl DeviceInner {
     /// submit completion handler can bump it.
     pub const fn coherent_seq_arc(&self) -> &Arc<AtomicU64> {
         &self.coherent_seq
+    }
+
+    /// Wait until the draw work submitted at `seq` retired, without going through the encoder.
+    ///
+    /// Returns at once on a device with no frame signal: the caller checks
+    /// `coherent_seq` after and waits another way.
+    pub fn await_draw(&self, seq: u64) -> Result<(), i32> {
+        self.encoder.await_draw(seq)
+    }
+
+    /// The highest seq whose submission failed on the GPU, 0 when none has.
+    pub fn latest_failed_submit(&self) -> u64 {
+        self.failed_submit_seq.load(Ordering::Acquire)
     }
 
     /// The texture-upload retirement atomic.
@@ -8813,6 +8826,25 @@ extern "system" fn device_get_render_target_data(
             "GetRenderTargetData: source is multisampled → INVALIDCALL (StretchRect it into a single-sampled surface first)");
         return D3DERR_INVALIDCALL;
     }
+    // A destination of another device would take this device's copy and
+    // settle it against this device, after this device may be gone.
+    if dst_surf.device_inner() != obj.inner_ptr() {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "reject GetRenderTargetData: destination owned by a different device → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
+    // D3D9 refuses a mapped destination, and a held device context maps the
+    // surface as a `LockRect` does: the application would hold a pointer the
+    // copy writes under it.
+    if dst_surf.is_locked() || dst_surf.has_open_dc() {
+        mtld3d_shared::log_once_warn!(
+            target: crate::LOG_TARGET,
+            "reject GetRenderTargetData: a locked or DC-held destination → INVALIDCALL"
+        );
+        return D3DERR_INVALIDCALL;
+    }
     let Some(dst_desc) = dst_surf.system_memory_blit_dst() else {
         warn_readback_rejected("GetRenderTargetData", ReadbackReject::NotSystemMemory);
         return D3DERR_INVALIDCALL;
@@ -8821,32 +8853,32 @@ extern "system" fn device_get_render_target_data(
     // texture level, whose handle lives encoder-side, or not a render target
     // at all.
     let src_handle = src.metal_color_handle();
-    let hr = if src_handle.is_null() {
-        readback_from_texture_rt(&obj, &src, &dst_desc)
-    } else {
-        if map_d3d_format(src.standalone_format()).is_none() {
-            warn_readback_rejected("GetRenderTargetData", ReadbackReject::FormatMismatch);
-            return D3DERR_INVALIDCALL;
-        }
-        let source = ReadbackSource {
-            width: src.standalone_width(),
-            height: src.standalone_height(),
-            format: src.standalone_format(),
-        };
-        if reject_readback("GetRenderTargetData", &source, &dst_desc).is_some() {
-            return D3DERR_INVALIDCALL;
-        }
-        blit_texture_to_systemmem(
-            obj.inner(),
-            &SystemMemReadback::for_readback(
-                src_handle,
-                // A standalone colour surface is one image: mip 0, slice 0.
-                (0, 0),
-                (source.width, source.height),
-                &dst_desc,
-            ),
-        )
+    if src_handle.is_null() {
+        return readback_from_texture_rt(&obj, &src, &dst_desc, &dst_surf);
+    }
+    if map_d3d_format(src.standalone_format()).is_none() {
+        warn_readback_rejected("GetRenderTargetData", ReadbackReject::FormatMismatch);
+        return D3DERR_INVALIDCALL;
+    }
+    let source = ReadbackSource {
+        width: src.standalone_width(),
+        height: src.standalone_height(),
+        format: src.standalone_format(),
     };
+    if reject_readback("GetRenderTargetData", &source, &dst_desc).is_some() {
+        return D3DERR_INVALIDCALL;
+    }
+    // A standalone colour surface is one image: mip 0, slice 0.
+    let read = SystemMemReadback::for_readback(
+        src_handle,
+        (0, 0),
+        (source.width, source.height),
+        &dst_desc,
+    );
+    if dst_surf.takes_queued_readback() {
+        return queue_readback(obj.inner(), &read, TextureId::from_raw(0), &dst_surf);
+    }
+    let hr = blit_texture_to_systemmem(obj.inner(), &read);
     if hr == D3D_OK {
         dst_surf.note_system_memory_written();
     }
@@ -8865,6 +8897,7 @@ fn readback_from_texture_rt(
     dev: &Direct3DDevice9,
     src: &Direct3DSurface9,
     dst: &SystemMemoryDst,
+    dst_surf: &Direct3DSurface9,
 ) -> i32 {
     let parent = src.parent_texture();
     if parent.is_null() {
@@ -8919,6 +8952,20 @@ fn readback_from_texture_rt(
     let parent_inner = unsafe { (*parent).inner_mut() };
     crate::texture::flush_dirty_mips(parent_inner, dev.inner());
     parent_inner.note_gpu_use();
+    if dst_surf.takes_queued_readback() {
+        // The encoder resolves the texture's handle itself, in frame order.
+        return queue_readback(
+            dev.inner(),
+            &SystemMemReadback::for_readback(
+                MetalHandle::NULL,
+                (metal_level, slice),
+                full_extent,
+                dst,
+            ),
+            texture_id,
+            dst_surf,
+        );
+    }
     let slot = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let slot_op = std::sync::Arc::clone(&slot).into();
     dev.inner().push_control(crate::device::ReadColorHandleOp {
@@ -8934,7 +8981,7 @@ fn readback_from_texture_rt(
             "GetRenderTargetData: texture-RT handle unresolved → INVALIDCALL");
         return D3DERR_INVALIDCALL;
     }
-    blit_handle_to_systemmem(
+    let hr = blit_handle_to_systemmem(
         dev.inner(),
         &SystemMemReadback::for_readback(
             // SAFETY: `h` is non-zero (checked above) and a live retained
@@ -8944,7 +8991,11 @@ fn readback_from_texture_rt(
             full_extent,
             dst,
         ),
-    )
+    );
+    if hr == D3D_OK {
+        dst_surf.note_system_memory_written();
+    }
+    hr
 }
 
 extern "system" fn device_get_front_buffer_data(
@@ -8973,9 +9024,11 @@ extern "system" fn device_get_front_buffer_data(
 
 /// Flush pending GPU work, then blit a Metal color texture into system memory.
 ///
-/// Shared by `GetRenderTargetData` / `GetFrontBufferData`; mirrors the
-/// per-`LockRect` backbuffer readback in `surface.rs`. The destination has
-/// already been checked against the source by `reject_readback`.
+/// `GetFrontBufferData`, and a `GetRenderTargetData` into a destination that
+/// does not take a queued copy (a texture level's staging), which
+/// [`queue_readback`] does not cover; mirrors the per-`LockRect` backbuffer
+/// readback in `surface.rs`. The destination has already been checked against
+/// the source by `reject_readback`.
 fn blit_texture_to_systemmem(device_inner: &mut DeviceInner, read: &SystemMemReadback) -> i32 {
     let src = read.tex_handle;
     // This blit reads the RT right after the flush. Mark it read-back BEFORE
@@ -8988,10 +9041,47 @@ fn blit_texture_to_systemmem(device_inner: &mut DeviceInner, read: &SystemMemRea
     blit_handle_to_systemmem(device_inner, read)
 }
 
-/// Parameters for one synchronous read of a Metal texture into system memory.
+/// Queue `read` into `dst`'s memory in frame order, without waiting: a `GetRenderTargetData`.
 ///
-/// The read starts at the texture's origin and covers `width` x `height` of mip
-/// `level` in array slice `slice`, so the extent belongs to that mip.
+/// D3D9 promises the pixels when the surface is next read, not when
+/// `GetRenderTargetData` returns. The copy rides the frame being recorded, in
+/// the ordered blit stream after the current pass, and runs when the frame is
+/// submitted; the destination keeps the seq of that frame and settles at its
+/// next read (`SurfaceInner::settle_readback`), so a game that locks last
+/// frame's copy while this one is made never waits. `read.tex_handle` names
+/// the source, or the texture `texture_id` names when it is NULL, which the
+/// encoder resolves itself.
+fn queue_readback(
+    device_inner: &mut DeviceInner,
+    read: &SystemMemReadback,
+    texture_id: TextureId,
+    dst: &Direct3DSurface9,
+) -> i32 {
+    let outcome = Arc::new(AtomicU32::new(0));
+    device_inner.push_control(ReadColorToMemoryOp {
+        done: Arc::clone(&outcome).into(),
+        color_handle: read.tex_handle.raw(),
+        texture_id,
+        level: read.level,
+        slice: read.slice,
+        width: read.width,
+        height: read.height,
+        bytes_per_row: read.bytes_per_row,
+        logical_width: read.full_width,
+        logical_height: read.full_height,
+        dst_ptr: read.dst_ptr,
+        dst_len: read.dst_len,
+    });
+    dst.queue_readback(device_inner.current_seq(), outcome);
+    D3D_OK
+}
+
+/// Parameters for one read of a Metal texture into system memory.
+///
+/// Read synchronously by [`blit_handle_to_systemmem`], or queued in frame order
+/// by [`queue_readback`]. The read starts at the texture's origin and covers
+/// `width` x `height` of mip `level` in array slice `slice`, so the extent
+/// belongs to that mip.
 /// `full_width` / `full_height` are the texture's own logical extent instead,
 /// which is what the source is measured against on the way out.
 pub struct SystemMemReadback {

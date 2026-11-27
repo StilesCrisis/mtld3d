@@ -6879,6 +6879,13 @@ fn blit_effect_on(
                 BlitEffect::Neither
             }
         }
+        Some(BlitCommandType::ReadColorToBuffer) => {
+            if handle_names_texture(blit.src_handle, target.texture, texture_view_to_base) {
+                BlitEffect::Reads
+            } else {
+                BlitEffect::Neither
+            }
+        }
         Some(
             BlitCommandType::CopyBufferToTexture
             | BlitCommandType::CopyBufferToDepth
@@ -7020,8 +7027,8 @@ fn pass_attaches_color(
 /// The texture a blit writes, if it writes one.
 ///
 /// `NotifyBufferDidModifyRange` and `CopyBufferToBuffer` carry buffer
-/// handles in `src_handle`/`dst_handle`, never texture handles, so they
-/// write no texture. An unknown variant on the wire is conservatively
+/// handles in `src_handle`/`dst_handle`, never texture handles, and
+/// `ReadColorToBuffer` writes a buffer, so they write no texture. An unknown variant on the wire is conservatively
 /// treated as texture-writing. The exhaustive match makes any new
 /// `BlitCommandType` a compile error here, forcing the author to classify it.
 const fn blit_written_texture(blit: &BlitCommand) -> Option<MetalHandle<MTLTextureKind>> {
@@ -7035,9 +7042,11 @@ const fn blit_written_texture(blit: &BlitCommand) -> Option<MetalHandle<MTLTextu
             | BlitCommandType::GenerateMipmaps,
         )
         | None => true,
-        Some(BlitCommandType::CopyBufferToBuffer | BlitCommandType::NotifyBufferDidModifyRange) => {
-            false
-        }
+        Some(
+            BlitCommandType::CopyBufferToBuffer
+            | BlitCommandType::NotifyBufferDidModifyRange
+            | BlitCommandType::ReadColorToBuffer,
+        ) => false,
     };
     if !writes_texture || blit.dst_handle == 0 {
         return None;
@@ -7049,16 +7058,18 @@ const fn blit_written_texture(blit: &BlitCommand) -> Option<MetalHandle<MTLTextu
 
 /// The texture a blit reads, if it reads one.
 ///
-/// A texture copy and a depth transfer read their source; mipmap generation
+/// A texture copy, a depth transfer and a readback read their source; mipmap generation
 /// reads level 0 of the texture it writes. The buffer-sourced variants read
 /// no texture. An unknown variant on the wire carries no known source and is
 /// treated as reading none. The exhaustive match makes any new
 /// `BlitCommandType` a compile error here, forcing the author to classify it.
 const fn blit_read_texture(blit: &BlitCommand) -> Option<MetalHandle<MTLTextureKind>> {
     let handle = match BlitCommandType::from_repr(blit.cmd) {
-        Some(BlitCommandType::CopyTextureToTexture | BlitCommandType::TransferDepth) => {
-            blit.src_handle
-        }
+        Some(
+            BlitCommandType::CopyTextureToTexture
+            | BlitCommandType::TransferDepth
+            | BlitCommandType::ReadColorToBuffer,
+        ) => blit.src_handle,
         Some(BlitCommandType::GenerateMipmaps) => blit.dst_handle,
         Some(
             BlitCommandType::CopyBufferToTexture

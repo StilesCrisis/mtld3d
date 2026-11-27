@@ -285,6 +285,11 @@ impl FrameRecorder {
                 let value = *value;
                 self.record_typed(scratch, value)
             }
+            Op::ReadColorToMemory(value) => {
+                #[cfg(not(pe_recording))]
+                let value = *value;
+                self.record_typed(scratch, value)
+            }
             Op::BeginVisibility(value) => {
                 #[cfg(not(pe_recording))]
                 let value = *value;
