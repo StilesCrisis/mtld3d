@@ -744,7 +744,26 @@ fn encode_frame(
     };
     // Everything is encoded and nothing has committed: settle what the
     // pending present reads before this frame's render work can overwrite it.
-    super::presenter::resolve_present_conflict(record.present(), &queue, outcome, packet.is_some());
+    // Under the host's present clock no present reads the back buffer: the
+    // frame ends with the copy its own present reads instead.
+    if record.present().clock().is_some() {
+        if let Some(packet) = packet.as_mut()
+            && !super::presenter::copy_for_present(record.present(), &cmd_buf, packet)
+        {
+            mtld3d_shared::log_once_warn!(
+                target: LOG_TARGET,
+                "submit_frame: no copy for the frame's present under the host's clock; the frame \
+                 is not presented",
+            );
+        }
+    } else {
+        super::presenter::resolve_present_conflict(
+            record.present(),
+            &queue,
+            outcome,
+            packet.is_some(),
+        );
+    }
 
     super::upscale::retire_evicted(&cmd_buf, record.upscale());
 
@@ -752,15 +771,18 @@ fn encode_frame(
     // buffer commits, so a draw counter that reaches this sequence finds it
     // noted; a present that will wait for the display carries the mark that
     // holds the frame unfinished until it is shown.
-    let pacing = packet.as_ref().and_then(|_| {
-        super::presenter::pacing(
-            attachment::find(
-                usize::try_from(params.present_view.raw())
-                    .expect("a 64-bit host addresses every view pointer"),
+    let pacing = packet
+        .as_ref()
+        .filter(|_| record.present().clock().is_none())
+        .and_then(|_| {
+            super::presenter::pacing(
+                attachment::find(
+                    usize::try_from(params.present_view.raw())
+                        .expect("a 64-bit host addresses every view pointer"),
+                )
+                .as_deref(),
             )
-            .as_deref(),
-        )
-    });
+        });
     let mark = record
         .present()
         .frame_signal()
@@ -821,6 +843,11 @@ pub struct PresentEncode<'a> {
     pub seq: u64,
     /// The `nextDrawable` wait of this present, for the cadence probe.
     pub drawable_wait_ns: u64,
+    /// The host paces the game on a clock of its own.
+    ///
+    /// The presenter's `clock` module: the present carries no minimum
+    /// duration, display sync alone.
+    pub host_clock: bool,
 }
 
 /// Encode the present of `args.source` into `drawable` and queue its presentation.
@@ -984,7 +1011,11 @@ pub fn encode_present(
     // display alone: the present still waits for it (it is paced),
     // but carries no minimum duration to slip a refresh by.
     let drawable_obj = ProtocolObject::from_ref(drawable);
-    let min_duration = attachment.map_or(0.0, |att| att.min_present_duration_sec());
+    let min_duration = if args.host_clock {
+        0.0
+    } else {
+        attachment.map_or(0.0, |att| att.min_present_duration_sec())
+    };
     let display_paced = attachment.is_some_and(|att| att.display_paces_presents());
     if min_duration > 0.0 && !display_paced {
         cmd_buf.presentDrawable_afterMinimumDuration(drawable_obj, min_duration);

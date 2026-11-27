@@ -7028,9 +7028,10 @@ fn pass_attaches_color(
 ///
 /// `NotifyBufferDidModifyRange` and `CopyBufferToBuffer` carry buffer
 /// handles in `src_handle`/`dst_handle`, never texture handles, and
-/// `ReadColorToBuffer` writes a buffer, so they write no texture. An unknown variant on the wire is conservatively
-/// treated as texture-writing. The exhaustive match makes any new
-/// `BlitCommandType` a compile error here, forcing the author to classify it.
+/// `ReadColorToBuffer` writes a buffer, so they write no texture. An unknown
+/// variant on the wire is conservatively treated as texture-writing. The
+/// exhaustive match makes any new `BlitCommandType` a compile error here,
+/// forcing the author to classify it.
 const fn blit_written_texture(blit: &BlitCommand) -> Option<MetalHandle<MTLTextureKind>> {
     let writes_texture = match BlitCommandType::from_repr(blit.cmd) {
         Some(

@@ -40,6 +40,7 @@ fn slot(reader: u64) -> Slot {
         height: 480,
         format: MTLPixelFormat::BGRA8Unorm,
         reader,
+        shown: 0,
     }
 }
 
@@ -65,6 +66,7 @@ fn state_with(inner: Inner) -> Arc<PresentState> {
         stalled: AtomicBool::new(false),
         present_occluded: false,
         frame_signal: Arc::new(FrameSignal::new()),
+        clock: None,
     })
 }
 
@@ -96,8 +98,13 @@ fn a_record_keeps_the_queue_alive_for_its_thread() {
 /// `debug.presentOccluded` reaches the state the presenter reads, and nothing else sets it.
 #[test]
 fn present_occluded_comes_from_the_queue_flags_alone() {
-    assert!(!PresentState::new(None, PresentDebugFlags::empty()).present_occluded);
-    assert!(PresentState::new(None, PresentDebugFlags::PRESENT_OCCLUDED).present_occluded);
+    assert!(
+        !PresentState::new(None, PresentDebugFlags::empty(), MetalHandle::NULL).present_occluded
+    );
+    assert!(
+        PresentState::new(None, PresentDebugFlags::PRESENT_OCCLUDED, MetalHandle::NULL)
+            .present_occluded
+    );
 }
 
 /// A handle round-trips to its record, and only the destroying caller ends it.

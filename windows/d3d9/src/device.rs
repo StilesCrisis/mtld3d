@@ -572,6 +572,11 @@ pub struct DeviceInner {
     outstanding_reset_blockers: AtomicU32,
     /// The frame-latency bound `Present` enforces, and what `GetMaximumFrameLatency` reports.
     frame_latency: mtld3d_core::frame_latency::FrameLatency,
+    /// The host paces `Present` on a clock of its own.
+    ///
+    /// `mtld3d_shared::present_clock`, latched at creation: no frame-latency
+    /// bound, the host's clock holds the game.
+    host_present_clock: bool,
     /// Monotonic submit seq.
     ///
     /// Each `present()` bumps this before stamping it onto the outgoing
@@ -2215,7 +2220,11 @@ impl DeviceInner {
         // The frame-latency bound: before the game records another frame, the
         // frame the device's maximum latency counts back from this one has to
         // have finished. A CPU-bound game finds it finished and pays two loads.
-        if let Some(target) = self.frame_latency.record_present(seq)
+        // Under the host's present clock the host returns `Present` on its
+        // ticks, and the display only shows the newest finished frame, so no
+        // frame waits for an earlier one to be shown.
+        if !self.host_present_clock
+            && let Some(target) = self.frame_latency.record_present(seq)
             && !self.encoder.frame_finished(target)
         {
             let waited =
@@ -3569,6 +3578,7 @@ impl Direct3DDevice9 {
             frame_latency: mtld3d_core::frame_latency::FrameLatency::new(
                 info.config.present_max_frame_latency,
             ),
+            host_present_clock: mtld3d_shared::present_clock::get().is_some(),
             backbuffer_width: info.backbuffer_width,
             backbuffer_height: info.backbuffer_height,
             render_scale: info.render_scale,

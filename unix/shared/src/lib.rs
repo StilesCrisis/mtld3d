@@ -21,6 +21,7 @@ pub mod mtl;
 pub mod mtl_handle;
 mod params;
 pub mod perf;
+pub mod present_clock;
 pub mod query_mailbox;
 pub mod record_handle;
 pub mod shader_create;

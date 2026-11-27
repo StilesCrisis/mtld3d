@@ -63,6 +63,9 @@ use super::{
 };
 use crate::LOG_TARGET;
 
+mod clock;
+pub use clock::{ClockPresent, copy_for_present};
+
 /// Slots a snapshot can copy into, per queue.
 ///
 /// A slot is busy from the copy until the present reading it commits, and
@@ -135,6 +138,10 @@ pub struct PresentState {
     present_occluded: bool,
     /// The device's frame-latency signal, which the paced presents of this queue hold up.
     frame_signal: Arc<FrameSignal>,
+    /// The host's present clock as this device latched it at creation.
+    ///
+    /// With the present queue and events it presents with (the `clock` module).
+    clock: Option<ClockPresent>,
 }
 
 struct Inner {
@@ -240,6 +247,10 @@ struct Slot {
     format: MTLPixelFormat,
     /// Sequence of the packet retargeted at this slot.
     reader: u64,
+    /// Under the host's clock: the sequence of the last present that read it.
+    ///
+    /// A copy into the slot waits for it on the GPU (0: none yet).
+    shown: u64,
 }
 
 impl Slot {
@@ -331,7 +342,11 @@ impl PresentState {
     ///
     /// The thread starts separately, once the record that owns this state
     /// exists, since the thread holds a reference to it.
-    pub fn new(gate: Option<PathBuf>, debug: PresentDebugFlags) -> Self {
+    pub fn new(
+        gate: Option<PathBuf>,
+        debug: PresentDebugFlags,
+        queue: MetalHandle<MTLCommandQueueKind>,
+    ) -> Self {
         if let Some(path) = &gate {
             log::info!(
                 target: LOG_TARGET,
@@ -363,7 +378,13 @@ impl PresentState {
             stalled: AtomicBool::new(false),
             present_occluded,
             frame_signal: Arc::new(FrameSignal::new()),
+            clock: ClockPresent::new(queue),
         }
+    }
+
+    /// The host's present clock, when this device presents for one.
+    pub const fn clock(&self) -> Option<&ClockPresent> {
+        self.clock.as_ref()
     }
 
     /// The device's frame-latency signal.
@@ -702,43 +723,7 @@ fn snapshot_into(
     else {
         return false;
     };
-    let width = u32::try_from(source.width()).expect("a texture width fits u32");
-    let height = u32::try_from(source.height()).expect("a texture height fits u32");
-    let format = source.pixelFormat();
-    let fits = inner.slots[index]
-        .as_ref()
-        .is_some_and(|slot| slot.matches(width, height, format));
-    if !fits {
-        let Some(wire_format) = texture::wire_pixel_format(format) else {
-            mtld3d_shared::log_once_warn!(
-                target: LOG_TARGET,
-                "presenter: {format:?} is not a format a snapshot slot can take",
-            );
-            return false;
-        };
-        let device = queue.device();
-        let Some(handle) = texture::create_upscale_target(&device, width, height, wire_format)
-        else {
-            return false;
-        };
-        if let Some(slot_texture) = handle.into_retained() {
-            let label =
-                objc2_foundation::NSString::from_str(&format!("mtld3d-snapshot-slot-{index}"));
-            slot_texture.setLabel(Some(&label));
-        }
-        // A replaced slot's texture stays alive in the buffers that encoded it.
-        inner.slots[index] = Some(Slot {
-            texture: handle,
-            width,
-            height,
-            format,
-            reader: 0,
-        });
-    }
-    let Some(slot_texture) = inner.slots[index]
-        .as_ref()
-        .and_then(|slot| slot.texture.into_retained())
-    else {
+    let Some(slot_texture) = ensure_slot(inner, index, &source, &queue.device()) else {
         return false;
     };
     let Some(cb) = diagnostics::command_buffer(queue) else {
@@ -782,6 +767,51 @@ fn snapshot_into(
         slot.reader = seq;
     }
     true
+}
+
+/// Slot `index`'s texture, made to fit `source` (its size and format) when it does not yet.
+///
+/// `None` when the format is not one a slot takes or the texture cannot be
+/// made (logged once). A replaced slot's texture stays alive in the buffers
+/// that encoded it.
+fn ensure_slot(
+    inner: &mut Inner,
+    index: usize,
+    source: &ProtocolObject<dyn MTLTexture>,
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+) -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let width = u32::try_from(source.width()).expect("a texture width fits u32");
+    let height = u32::try_from(source.height()).expect("a texture height fits u32");
+    let format = source.pixelFormat();
+    let fits = inner.slots[index]
+        .as_ref()
+        .is_some_and(|slot| slot.matches(width, height, format));
+    if !fits {
+        let Some(wire_format) = texture::wire_pixel_format(format) else {
+            mtld3d_shared::log_once_warn!(
+                target: LOG_TARGET,
+                "presenter: {format:?} is not a format a snapshot slot can take",
+            );
+            return None;
+        };
+        let handle = texture::create_upscale_target(device, width, height, wire_format)?;
+        if let Some(slot_texture) = handle.into_retained() {
+            let label =
+                objc2_foundation::NSString::from_str(&format!("mtld3d-snapshot-slot-{index}"));
+            slot_texture.setLabel(Some(&label));
+        }
+        inner.slots[index] = Some(Slot {
+            texture: handle,
+            width,
+            height,
+            format,
+            reader: 0,
+            shown: 0,
+        });
+    }
+    inner.slots[index]
+        .as_ref()
+        .and_then(|slot| slot.texture.into_retained())
 }
 
 /// Consume a packet that presents nothing.
@@ -863,6 +893,10 @@ fn presenter_main(record: &Arc<DeviceRecord>, queue: MetalHandle<MTLCommandQueue
         log::error!(target: LOG_TARGET, "presenter: queue retain failed (handle={queue:#x})");
         return;
     };
+    if let Some(clock) = record.present().clock() {
+        while objc2::rc::autoreleasepool(|_| clock::present_frame(record, clock)) {}
+        return;
+    }
     while objc2::rc::autoreleasepool(|_| present_frame(record, &queue)) {}
 }
 
@@ -1010,6 +1044,7 @@ fn present_frame(record: &Arc<DeviceRecord>, queue: &ProtocolObject<dyn MTLComma
             source: &source,
             seq,
             drawable_wait_ns,
+            host_clock: false,
         },
     );
     // A present that waits for the display finishes its frame once it is on

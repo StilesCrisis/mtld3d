@@ -54,6 +54,16 @@ pub extern "C" fn d3d9metal_set_frame_thread_priority(high: u32) {
     mtld3d_unix::set_frame_thread_priority(high != 0);
 }
 
+/// `d3d9metal_set_present_clock`: the host paces each `Present` on a clock of its own.
+///
+/// `num / den` nanoseconds per tick (`den` 0: none, the default). Call it
+/// before the device is created: a device made afterwards presents for the
+/// host's clock (`mtld3d_shared::present_clock`), one made before as it did.
+#[unsafe(no_mangle)]
+pub extern "C" fn d3d9metal_set_present_clock(num: u64, den: u64) {
+    mtld3d_shared::present_clock::set(num, den);
+}
+
 /// `d3d9metal_Direct3DCreate9`: an `IDirect3D9`, or null before `d3d9metal_init`.
 #[unsafe(export_name = "d3d9metal_Direct3DCreate9")]
 #[must_use]

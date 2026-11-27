@@ -62,6 +62,11 @@ use attachment::{AttachFlags, AttachLatches, Attachment};
 
 /// How many drawables the layer keeps, as the Wine build's metal view does.
 const DRAWABLE_POOL_DEPTH: usize = 3;
+/// How many under the host's present clock (`mtld3d_shared::present_clock`).
+///
+/// The presenter shows the newest frame, and a third drawable would only add
+/// a refresh of latency.
+const CLOCK_DRAWABLES: usize = 2;
 
 /// Attach the host's layer behind `request.hwnd` to the device, and register its record.
 ///
@@ -320,7 +325,11 @@ fn configure_layer(
     // back-buffer texture, and present writes it through render passes.
     layer.setFramebufferOnly(true);
     set_layer_display_sync(layer, display_sync);
-    layer.setMaximumDrawableCount(DRAWABLE_POOL_DEPTH);
+    layer.setMaximumDrawableCount(if mtld3d_shared::present_clock::get().is_some() {
+        CLOCK_DRAWABLES
+    } else {
+        DRAWABLE_POOL_DEPTH
+    });
     layer.setAllowsNextDrawableTimeout(true);
     layer.setPresentsWithTransaction(false);
     sync_drawable_size(layer);

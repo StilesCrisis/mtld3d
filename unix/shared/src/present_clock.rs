@@ -1,0 +1,66 @@
+//! The host's present clock: a native host that paces each `Present` itself.
+//!
+//! A native host that returns the game's `Present` on a clock of its own, at
+//! the rate the game's display was built for (the host's
+//! `d3d9metal_set_present_clock`), sets it here before it creates a device.
+//! A device created afterwards latches it ([`get`]) and presents for that
+//! clock: presents on a queue of their own reading a copy of each frame, the
+//! presenter showing the newest finished frame on the display, and no
+//! frame-latency bound in `Present` (the host's clock paces the game). A
+//! device created without it presents as before.
+//!
+//! The rate is a rational period, `num / den` nanoseconds, so a host can name
+//! a rate no whole number of hertz or nanoseconds expresses.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The host's choice, `num / den` ns per tick; `den == 0` means none.
+///
+/// A static because the caller has no object to reach: the host makes the
+/// call before any device exists, as it chooses the frame threads' priority,
+/// and each device latches it at creation, where the state then lives.
+static NUM: AtomicU64 = AtomicU64::new(0);
+static DEN: AtomicU64 = AtomicU64::new(0);
+
+/// A present clock's period, `num / den` ns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentClock {
+    pub num: u64,
+    pub den: u64,
+}
+
+/// Set the host's present clock (`den == 0`: none). Devices created afterwards take it.
+pub fn set(num: u64, den: u64) {
+    DEN.store(0, Ordering::Release);
+    NUM.store(num, Ordering::Release);
+    DEN.store(if num == 0 { 0 } else { den }, Ordering::Release);
+}
+
+/// The host's present clock, `None` when it paces nothing.
+#[must_use]
+pub fn get() -> Option<PresentClock> {
+    let den = DEN.load(Ordering::Acquire);
+    let num = NUM.load(Ordering::Acquire);
+    (den != 0 && num != 0).then_some(PresentClock { num, den })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clock_is_set_read_and_cleared() {
+        set(2_080 * 1_144 * 1_000_000_000, 285_500_000);
+        assert_eq!(
+            get(),
+            Some(PresentClock {
+                num: 2_379_520_000_000_000,
+                den: 285_500_000
+            })
+        );
+        set(0, 0);
+        assert_eq!(get(), None);
+        set(1_000_000_000, 0);
+        assert_eq!(get(), None, "a zero denominator names no clock");
+    }
+}

@@ -78,7 +78,7 @@ impl DeviceRecord {
     ) -> Arc<Self> {
         Arc::new(Self {
             queue,
-            present: PresentState::new(gate, present_debug),
+            present: PresentState::new(gate, present_debug, queue),
             presented: Presented::new(),
             upscale: UpscaleCache::new(),
             pending: PendingCmdBufs::new(),

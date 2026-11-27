@@ -135,6 +135,16 @@ void *d3d9metal_Direct3DCreate9(unsigned sdk_version);
  */
 void d3d9metal_set_frame_thread_priority(unsigned high);
 
+/*
+ * The host's present clock: the host returns each Present on a clock of its
+ * own, at num / den nanoseconds a tick (den 0: none, the default), and the
+ * library presents for it: presents on a queue of their own reading a copy of
+ * each frame, the display showing the newest finished frame (two drawables),
+ * and no frame-latency wait in Present. Call it before creating a device; a
+ * device made before keeps presenting as it did.
+ */
+void d3d9metal_set_present_clock(uint64_t num, uint64_t den);
+
 #ifdef __cplusplus
 }
 #endif
