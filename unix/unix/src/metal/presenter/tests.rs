@@ -262,6 +262,29 @@ fn a_slot_at_another_geometry_is_replaced() {
 }
 
 #[test]
+fn a_dropped_packet_the_host_timed_is_recorded_as_not_shown() {
+    use mtld3d_shared::present_clock::{Shown, take_shown};
+    let state = state_with(empty_inner());
+    let mut inner = state.lock();
+    let mut timed = packet(3, None);
+    timed.present_at_ns = 0x5eed_0001;
+    drop_packet(&mut inner, timed);
+    drop_packet(&mut inner, packet(4, None));
+    let mut out: Vec<Shown> = std::iter::repeat_with(Shown::default).take(64).collect();
+    let n = take_shown(&mut out);
+    let ours: Vec<&Shown> = out[..n]
+        .iter()
+        .filter(|r| r.present_at_ns == 0x5eed_0001)
+        .collect();
+    assert_eq!(ours.len(), 1, "one record for the timed frame");
+    assert!(ours[0].presented_s == 0.0, "recorded as not shown");
+    assert!(
+        out[..n].iter().all(|r| r.present_at_ns != 0),
+        "a frame without a time leaves no record"
+    );
+}
+
+#[test]
 fn a_dropped_packet_frees_its_slot_and_leaves_retirement_alone() {
     let state = state_with(empty_inner());
     let mut inner = state.lock();

@@ -16,17 +16,19 @@
 //!   sequence and the present waits for it; the present signals `shown` with
 //!   its sequence, and the next copy into the same slot waits for that.
 //! * The presenter takes a drawable first (`nextDrawable` blocks until one is
-//!   free), then the newest finished frame, and drops any older one waiting.
-//!   It presents with plain `presentDrawable`: display sync on, no minimum
-//!   duration. The queue between the game and the display is then never
-//!   deeper than the drawable pool, two drawables (`host_layer`'s
-//!   `CLOCK_DRAWABLES`), so no frames pile up.
+//!   free), then a frame. A frame the host named a time for is presented at
+//!   it (`presentDrawable atTime:`), oldest first, an older one giving way only
+//!   once a newer one is already due; a frame without one is the newest
+//!   finished, older ones giving way. The queue between the game and the
+//!   display is then never deeper than the drawable pool
+//!   (`DRAWABLE_POOL_DEPTH`), so no frames pile up.
+//! * What the display did with each frame the host named a time for is
+//!   recorded for the host (`present_clock::note_shown`): when it was shown,
+//!   or, for any frame dropped on the way (`drop_packet`), that it was not.
 //!
-//! Ring size: [`CLOCK_SLOTS`]. At most two presents are in flight (the two
-//! drawables), one finished frame waits for a drawable and one is being
-//! copied. A copy that finds every slot read by a frame still waiting takes
-//! the oldest waiting frame's slot: that frame would have given way to a
-//! newer one anyway.
+//! Ring size: [`CLOCK_SLOTS`]. A copy that finds every slot read by a frame
+//! still waiting takes the oldest waiting frame's slot: that frame would have
+//! given way to a newer one anyway.
 
 use std::sync::PoisonError;
 
@@ -271,9 +273,6 @@ pub fn present_frame(record: &std::sync::Arc<DeviceRecord>, clock: &ClockPresent
             break;
         }
         let older = inner.pending.pop_front().expect("more than one is waiting");
-        if older.present_at_ns != 0 {
-            mtld3d_shared::present_clock::note_shown(older.present_at_ns, 0.0);
-        }
         if let Some(att) = attachment.as_deref() {
             att.take_present();
         }

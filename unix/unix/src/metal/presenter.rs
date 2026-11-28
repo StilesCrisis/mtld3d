@@ -830,9 +830,14 @@ fn ensure_slot(
 /// Marks it committed so a submit waiting for it goes on and a slot it read
 /// frees. The retirement counter stays where it is: no present buffer
 /// carries this sequence, and advancing the counter past a committed
-/// present still on the GPU would end an idle wait early.
+/// present still on the GPU would end an idle wait early. A frame the host
+/// named a time for is recorded for it as not shown.
 fn drop_packet(inner: &mut Inner, packet: PresentPacket) {
     inner.committed_present_seq = inner.committed_present_seq.max(packet.seq);
+    if packet.present_at_ns != 0 {
+        // Never shown: the host counts it as dropped (`present_clock::note_shown`).
+        mtld3d_shared::present_clock::note_shown(packet.present_at_ns, 0.0);
+    }
     drop(packet);
 }
 
